@@ -1,14 +1,52 @@
+import { randomUUID } from "node:crypto";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { leagueName } from "@/lib/leagues";
+import { botLink, sendMessage } from "@/lib/telegram";
 
 export const dynamic = "force-dynamic";
+
+function back(email: string, extra = ""): string {
+  return `/dashboard?email=${encodeURIComponent(email)}${extra}`;
+}
+
+async function createLink(formData: FormData) {
+  "use server";
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (user && !user.linkCode) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { linkCode: randomUUID().replace(/-/g, "") },
+    });
+  }
+  redirect(back(email));
+}
+
+async function sendTest(formData: FormData) {
+  "use server";
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const user = await prisma.user.findUnique({ where: { email } });
+
+  let result = "nochat";
+  if (user?.telegramChatId) {
+    try {
+      await sendMessage(user.telegramChatId, "Test message from Final Whistle. Your chat is connected.");
+      result = "ok";
+    } catch (e) {
+      console.error("sendTest failed:", e);
+      result = "fail";
+    }
+  }
+  redirect(back(email, `&test=${result}`));
+}
 
 export default async function Dashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ email?: string }>;
+  searchParams: Promise<{ email?: string; test?: string }>;
 }) {
-  const { email } = await searchParams;
+  const { email, test } = await searchParams;
 
   if (!email) {
     return (
@@ -26,8 +64,9 @@ export default async function Dashboard({
     );
   }
 
+  const normalized = email.trim().toLowerCase();
   const user = await prisma.user.findUnique({
-    where: { email: email.trim().toLowerCase() },
+    where: { email: normalized },
     include: {
       brands: { orderBy: { createdAt: "desc" } },
       subscriptions: { orderBy: { createdAt: "desc" } },
@@ -45,10 +84,49 @@ export default async function Dashboard({
     );
   }
 
+  const link = user.linkCode ? botLink(user.linkCode) : null;
+
   return (
     <>
       <h1>Dashboard</h1>
-      <p className="lead">{user.name ? `${user.name} · ` : ""}{user.email}</p>
+      <p className="lead">
+        {user.name ? `${user.name} · ` : ""}
+        {user.email}
+      </p>
+
+      <h2>Telegram</h2>
+      {user.telegramChatId ? (
+        <div className="card">
+          <strong>Connected</strong>
+          <small>Posts will be delivered to your Telegram chat.</small>
+          <form action={sendTest} style={{ marginTop: 12 }}>
+            <input type="hidden" name="email" value={user.email} />
+            <button type="submit">Send a test message</button>
+          </form>
+          {test === "ok" && <p>Test message sent. Check Telegram.</p>}
+          {test === "fail" && <p className="error">Sending failed. See the terminal where `npm run dev` runs.</p>}
+        </div>
+      ) : !user.linkCode ? (
+        <div className="card">
+          <strong>Not connected</strong>
+          <form action={createLink} style={{ marginTop: 12 }}>
+            <input type="hidden" name="email" value={user.email} />
+            <button type="submit">Create Telegram connect link</button>
+          </form>
+        </div>
+      ) : link ? (
+        <div className="card">
+          <strong>Almost there</strong>
+          <small>Open the link, press Start in Telegram, then reload this page.</small>
+          <p>
+            <a className="btn" href={link} target="_blank" rel="noreferrer">
+              Open Telegram
+            </a>
+          </p>
+        </div>
+      ) : (
+        <p className="error">TELEGRAM_BOT_USERNAME is not set in .env.</p>
+      )}
 
       <h2>Pages</h2>
       {user.brands.map((b) => (

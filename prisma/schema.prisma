@@ -11,6 +11,11 @@ model User {
   id            String         @id @default(cuid())
   email         String         @unique
   name          String?
+  // Telegram connection: linkCode goes into the t.me/<bot>?start=<code> link,
+  // telegramChatId is filled in by the bot when the user opens that link.
+  linkCode         String?   @unique
+  telegramChatId   String?
+  telegramLinkedAt DateTime?
   createdAt     DateTime       @default(now())
   brands        Brand[]
   subscriptions Subscription[]
