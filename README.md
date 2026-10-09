@@ -17,3 +17,18 @@ Check the database connection: http://localhost:3000/api/health
 - `src/app/signup`: sign-up form (server action writes to the database)
 - `src/app/dashboard`: shows an account by email
 - `src/lib/leagues.ts`: league ids shared with the n8n workflow
+
+## Worker (match posts)
+
+New tables: `Match` (shared cache), `Selection`, `FixtureDay`, `ApiUsage`.
+After copying these files run once: `npm run db:push`.
+
+Run in separate terminals (plus the render server):
+
+    npm run bot
+    npm run worker
+
+Flow: `/matches` in Telegram -> tap matches -> send a background image -> when the match
+ends (110 min after kickoff) the finished post arrives. API-Football is asked once per match;
+all customers share the result. Matches older than 48 h are deleted. The API counter stops at
+90 requests/day (`DAILY_API_LIMIT`).
