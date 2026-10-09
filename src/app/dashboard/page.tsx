@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { leagueName } from "@/lib/leagues";
-import { botLink, sendMessage } from "@/lib/telegram";
+import { botLink, sendDocument, sendMessage } from "@/lib/telegram";
+import { renderSamplePost } from "@/lib/render";
 
 export const dynamic = "force-dynamic";
 
@@ -41,12 +42,37 @@ async function sendTest(formData: FormData) {
   redirect(back(email, `&test=${result}`));
 }
 
+// Renders a sample post for the user's newest page (sample match, their page name and
+// background) with the local render server and sends it to their Telegram chat.
+async function sendSample(formData: FormData) {
+  "use server";
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const user = await prisma.user.findUnique({
+    where: { email },
+    include: { brands: { orderBy: { createdAt: "desc" }, take: 1 } },
+  });
+
+  let result = "nochat";
+  const brand = user?.brands[0];
+  if (user?.telegramChatId && brand) {
+    try {
+      const jpgPath = await renderSamplePost(brand);
+      await sendDocument(user.telegramChatId, jpgPath, `Sample post for ${brand.name}`);
+      result = "ok";
+    } catch (e) {
+      console.error("sendSample failed:", e);
+      result = "fail";
+    }
+  }
+  redirect(back(email, `&sample=${result}`));
+}
+
 export default async function Dashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ email?: string; test?: string }>;
+  searchParams: Promise<{ email?: string; test?: string; sample?: string }>;
 }) {
-  const { email, test } = await searchParams;
+  const { email, test, sample } = await searchParams;
 
   if (!email) {
     return (
@@ -105,6 +131,19 @@ export default async function Dashboard({
           </form>
           {test === "ok" && <p>Test message sent. Check Telegram.</p>}
           {test === "fail" && <p className="error">Sending failed. See the terminal where `npm run dev` runs.</p>}
+
+          <form action={sendSample} style={{ marginTop: 12 }}>
+            <input type="hidden" name="email" value={user.email} />
+            <button type="submit">Send a sample post</button>
+          </form>
+          <small>Takes a few seconds. The render server must be running (port 4500).</small>
+          {sample === "ok" && <p>Sample post sent. Check Telegram.</p>}
+          {sample === "fail" && (
+            <p className="error">
+              Could not create or send the post. Is the render server running? Details are in the terminal where
+              `npm run dev` runs.
+            </p>
+          )}
         </div>
       ) : !user.linkCode ? (
         <div className="card">
