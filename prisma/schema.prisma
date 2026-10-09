@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String?
+  createdAt     DateTime       @default(now())
+  brands        Brand[]
+  subscriptions Subscription[]
+}
+
+// The page the posts are made for: name shown on the image + optional background.
+model Brand {
+  id            String   @id @default(cuid())
+  userId        String
+  name          String
+  backgroundUrl String?
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Which leagues a user wants posts for (API-Football league ids).
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String
+  leagueIds Int[]
+  plan      String   @default("demo")
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
