@@ -79,6 +79,8 @@ async function loadDay(date) {
       leagueName: f.league.name,
       leagueLogo: f.league.logo,
       homeTeam: f.teams.home.name,
+      homeTeamId: f.teams.home.id,
+      awayTeamId: f.teams.away.id,
       awayTeam: f.teams.away.name,
       homeLogo: f.teams.home.logo,
       awayLogo: f.teams.away.logo,
@@ -88,6 +90,14 @@ async function loadDay(date) {
       awayScore: f.goals.away,
     };
     await prisma.match.upsert({ where: { fixtureId: f.fixture.id }, create: { fixtureId: f.fixture.id, ...data }, update: data });
+    // Remember the clubs, so customers can pick them on the dashboard (never overwrite an existing row).
+    for (const t of [f.teams.home, f.teams.away]) {
+      await prisma.team.upsert({
+        where: { id: t.id },
+        create: { id: t.id, name: t.name, logo: t.logo, leagueId: f.league.id },
+        update: {},
+      });
+    }
   }
   await prisma.fixtureDay.upsert({ where: { date: key }, create: { date: key }, update: { fetchedAt: new Date() } });
   console.log(`[day] ${date}: ${wanted.length} matches stored`);

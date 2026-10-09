@@ -10,7 +10,8 @@
     "db:studio": "prisma studio",
     "bot": "node --env-file=.env scripts/bot.mjs",
     "postinstall": "prisma generate",
-    "worker": "node --env-file=.env scripts/worker.mjs"
+    "worker": "node --env-file=.env scripts/worker.mjs",
+    "seed:teams": "node --env-file=.env scripts/seed-teams.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

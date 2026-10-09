@@ -91,3 +91,6 @@ button, .btn {
 .error { color: #b3261e; font-weight: 600; }
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .pill { background: #e6ebe4; border-radius: 999px; padding: 2px 10px; font-size: 14px; }
+
+details.card summary { cursor: pointer; }
+.clubs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0 16px; margin-top: 10px; }

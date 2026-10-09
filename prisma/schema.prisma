@@ -16,12 +16,17 @@ model User {
   linkCode         String?   @unique
   telegramChatId   String?
   telegramLinkedAt DateTime?
+  // The customer's OWN Telegram bot (token stored encrypted). Empty = shared demo bot.
+  botToken         String?
+  botId            String?   @unique
+  botUsername      String?
   // A background photo that was uploaded but not yet assigned to a match.
   pendingBackgroundPath String?
   createdAt     DateTime       @default(now())
   brands        Brand[]
   subscriptions Subscription[]
   selections    Selection[]
+  favoriteTeams FavoriteTeam[]
 }
 
 // The page the posts are made for: name shown on the image + optional background.
@@ -30,6 +35,8 @@ model Brand {
   userId        String
   name          String
   backgroundUrl String?
+  // Image uploaded from the dashboard (file on this computer, storage/backgrounds).
+  backgroundPath String?
   createdAt     DateTime @default(now())
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -62,6 +69,8 @@ model Match {
   leagueLogo    String
   homeTeam      String
   awayTeam      String
+  homeTeamId    Int?
+  awayTeamId    Int?
   homeLogo      String
   awayLogo      String
   kickoff       DateTime
@@ -107,4 +116,24 @@ model FixtureDay {
 model ApiUsage {
   day   String @id
   count Int    @default(0)
+}
+
+// Clubs a customer can follow (filled by "npm run seed:teams" and by the daily match lists).
+model Team {
+  id       Int    @id // API-Football team id
+  name     String
+  logo     String
+  leagueId Int
+
+  @@index([leagueId])
+}
+
+// "Show me every match of this club in /matches", even if its league is not selected.
+model FavoriteTeam {
+  id     String @id @default(cuid())
+  userId String
+  teamId Int
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
 }

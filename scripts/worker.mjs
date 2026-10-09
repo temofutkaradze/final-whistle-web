@@ -10,7 +10,7 @@
 
 import { unlink } from "node:fs/promises";
 import { prisma } from "./lib/db.mjs";
-import { sendDocument, sendMessage } from "./lib/telegram.mjs";
+import { telegramForUser } from "./lib/telegram.mjs";
 import { buildEventsHtml } from "./lib/events.mjs";
 import { DEFAULT_BACKGROUND, downloadBackground, fileExists, pageNameForImage, renderPost } from "./lib/render.mjs";
 import { fetchEventsOnce, isDead, isFinished, localDate, refreshStatuses } from "./lib/football.mjs";
@@ -27,8 +27,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const minutes = (n) => n * 60e3;
 const hours = (n) => n * 3600e3;
 
+// Sends a plain message to the customer through THEIR bot; never lets a Telegram error stop the worker.
+async function notify(user, text) {
+  try {
+    await telegramForUser(user).sendMessage(user.telegramChatId, text);
+  } catch (e) {
+    console.error("notify failed:", e.message);
+  }
+}
+
 async function pickBackground(sel, brand) {
   if (sel.backgroundPath && (await fileExists(sel.backgroundPath))) return { background_path: sel.backgroundPath };
+  if (brand?.backgroundPath && (await fileExists(brand.backgroundPath))) return { background_path: brand.backgroundPath };
   if (brand?.backgroundUrl) {
     try {
       const p = await downloadBackground(brand.id, brand.backgroundUrl);
@@ -38,6 +48,13 @@ async function pickBackground(sel, brand) {
     }
   }
   return { background_data_uri: DEFAULT_BACKGROUND };
+}
+
+// The customer's own bot if they have one, otherwise the shared demo bot.
+function telegramFor(user) {
+  const token = user.botToken ? decryptSecret(user.botToken) : sharedToken;
+  if (!token) throw new Error("No Telegram bot token available for this customer");
+  return makeTelegram(token);
 }
 
 async function sendOne(sel, match, eventsHtml) {
@@ -55,7 +72,7 @@ async function sendOne(sel, match, eventsHtml) {
     away_score: match.awayScore,
     ...eventsHtml,
   });
-  await sendDocument(sel.user.telegramChatId, jpg, `${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+  await telegramForUser(sel.user).sendDocument(sel.user.telegramChatId, jpg, `${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
 }
 
 async function tick() {
@@ -96,11 +113,10 @@ async function tick() {
   for (const sel of sels) {
     const match = matchById.get(sel.fixtureId);
     if (!match) continue;
-    const chatId = sel.user.telegramChatId;
 
     if (isDead(match.statusShort)) {
       await prisma.selection.update({ where: { id: sel.id }, data: { status: "FAILED", lastError: `match ${match.statusShort}` } });
-      await sendMessage(chatId, `${match.homeTeam} - ${match.awayTeam} was postponed or cancelled, so there is no post.`);
+      await notify(sel.user, `${match.homeTeam} - ${match.awayTeam} was postponed or cancelled, so there is no post.`);
       continue;
     }
     if (!isFinished(match.statusShort) || !match.eventsJson) continue;
@@ -132,7 +148,7 @@ async function tick() {
         where: { id: sel.id },
         data: { status: failed ? "FAILED" : "SELECTED", attempts, lastError: String(e.message).slice(0, 500) },
       });
-      if (failed) await sendMessage(chatId, `Sorry, the post for ${match.homeTeam} - ${match.awayTeam} could not be created.`);
+      if (failed) await notify(sel.user, `Sorry, the post for ${match.homeTeam} - ${match.awayTeam} could not be created.`);
     }
   }
 }

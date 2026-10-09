@@ -32,3 +32,11 @@ Flow: `/matches` in Telegram -> tap matches -> send a background image -> when t
 ends (110 min after kickoff) the finished post arrives. API-Football is asked once per match;
 all customers share the result. Matches older than 48 h are deleted. The API counter stops at
 90 requests/day (`DAILY_API_LIMIT`).
+
+## Each customer has their own bot
+
+On the dashboard the customer creates a bot with @BotFather and pastes its token. The token is
+stored encrypted (needs `APP_SECRET` in `.env`). `npm run bot` starts one polling loop per customer
+bot and checks for new ones every 30 seconds. The first chat that presses Start in a customer's bot
+becomes their chat; everyone else gets "This bot is private." The worker sends each post through the
+customer's own bot.
