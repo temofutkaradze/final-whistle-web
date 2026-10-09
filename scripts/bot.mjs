@@ -45,6 +45,12 @@ async function todaysMatches() {
   return prisma.match.findMany({ where: { day: date }, orderBy: [{ kickoff: "asc" }, { fixtureId: "asc" }] });
 }
 
+// League ids the customer chose when signing up. Empty = show every league we store.
+async function userLeagues(userId) {
+  const subs = await prisma.subscription.findMany({ where: { userId, status: "ACTIVE" }, select: { leagueIds: true } });
+  return new Set(subs.flatMap((s) => s.leagueIds));
+}
+
 async function sendMatchList(chatId, user, search) {
   let matches;
   try {
@@ -54,6 +60,8 @@ async function sendMatchList(chatId, user, search) {
     await sendMessage(chatId, "Could not load today's matches right now. Please try again in a few minutes.");
     return;
   }
+  const leagues = await userLeagues(user.id);
+  if (leagues.size) matches = matches.filter((m) => leagues.has(m.leagueId));
   if (search) matches = matches.filter((m) => `${m.homeTeam} ${m.awayTeam}`.toLowerCase().includes(search));
   matches = matches.slice(0, MAX_BUTTONS);
 

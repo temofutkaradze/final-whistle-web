@@ -1,11 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { leagueName } from "@/lib/leagues";
 import { botLink, sendDocument, sendMessage } from "@/lib/telegram";
 import { renderSamplePost } from "@/lib/render";
 
 export const dynamic = "force-dynamic";
+
+const TZ = process.env.DISPLAY_TZ || "Asia/Tbilisi";
+
+function formatKickoff(d: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: TZ,
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  SELECTED: "Waiting for the match to finish",
+  SENDING: "Creating your post",
+  COMPLETED: "Sent to Telegram",
+  FAILED: "Could not be created",
+};
 
 function back(email: string, extra = ""): string {
   return `/dashboard?email=${encodeURIComponent(email)}${extra}`;
@@ -95,7 +114,7 @@ export default async function Dashboard({
     where: { email: normalized },
     include: {
       brands: { orderBy: { createdAt: "desc" } },
-      subscriptions: { orderBy: { createdAt: "desc" } },
+      selections: { orderBy: { createdAt: "desc" }, take: 30, include: { match: true } },
     },
   });
 
@@ -171,25 +190,33 @@ export default async function Dashboard({
       {user.brands.map((b) => (
         <div className="card" key={b.id}>
           <strong>{b.name}</strong>
-          <small>{b.backgroundUrl ?? "No background yet"}</small>
+          <small>
+            Backgrounds are sent per match in Telegram: select a match, then send the photo you want behind it.
+          </small>
         </div>
       ))}
 
-      <h2>Subscriptions</h2>
-      {user.subscriptions.map((s) => (
-        <div className="card" key={s.id}>
-          <strong>
-            {s.plan} · {s.status}
-          </strong>
-          <div className="pills">
-            {s.leagueIds.map((id) => (
-              <span className="pill" key={id}>
-                {leagueName(id)}
-              </span>
-            ))}
+      <h2>My matches</h2>
+      <small>Pick matches in Telegram with /matches. This list updates when you reload the page.</small>
+      {user.selections.length === 0 && <p>No matches selected yet.</p>}
+      {user.selections.map((sel) => {
+        const m = sel.match;
+        const finished = m.homeScore !== null && m.awayScore !== null && ["FT", "AET", "PEN"].includes(m.statusShort);
+        return (
+          <div className="card" key={sel.id}>
+            <strong>
+              {m.homeTeam} {finished ? `${m.homeScore} - ${m.awayScore}` : "-"} {m.awayTeam}
+            </strong>
+            <small>
+              {m.leagueName} · {formatKickoff(m.kickoff)}
+            </small>
+            <div className="pills">
+              <span className="pill">{STATUS_LABEL[sel.status] ?? sel.status}</span>
+              {sel.backgroundPath && <span className="pill">Custom background</span>}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }
