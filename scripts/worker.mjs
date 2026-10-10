@@ -50,13 +50,6 @@ async function pickBackground(sel, brand) {
   return { background_data_uri: DEFAULT_BACKGROUND };
 }
 
-// The customer's own bot if they have one, otherwise the shared demo bot.
-function telegramFor(user) {
-  const token = user.botToken ? decryptSecret(user.botToken) : sharedToken;
-  if (!token) throw new Error("No Telegram bot token available for this customer");
-  return makeTelegram(token);
-}
-
 async function sendOne(sel, match, eventsHtml) {
   const brand = sel.user.brands[0];
   const jpg = await renderPost({

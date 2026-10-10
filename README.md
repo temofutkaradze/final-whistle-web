@@ -40,3 +40,22 @@ stored encrypted (needs `APP_SECRET` in `.env`). `npm run bot` starts one pollin
 bot and checks for new ones every 30 seconds. The first chat that presses Start in a customer's bot
 becomes their chat; everyone else gets "This bot is private." The worker sends each post through the
 customer's own bot.
+
+## Testing phase: run the bot and worker only while testing
+
+The bot checks Neon every 30 seconds and the worker every 60 seconds. While either one runs, the
+database never gets idle, so Neon cannot suspend its compute after 5 minutes of inactivity.
+The Neon Free plan includes 100 CU-hours of compute and 0.5 GB of storage per project. If the
+compute runs all day, every day, those 100 CU-hours can be used up before the month ends; then the
+database is suspended until the limits renew (no charge on the Free plan, but the site stops working).
+
+So during the free testing phase:
+
+- Start `npm run bot` and `npm run worker` (or `start-system.bat`) only when you are testing, and close
+  the terminal window afterwards. The site itself (`npm run dev`) only queries Neon when a page is opened.
+- Do not reuse the bot that the old n8n workflow uses. `npm run bot` removes a bot's webhook so it can
+  poll, which would switch n8n's trigger off. Create a new bot with @BotFather for the site.
+- Keep `.env` (database URL, API keys, bot tokens, `APP_SECRET`) out of git. `storage/` (background
+  photos and other generated files) is also ignored. If a file in `storage/` was committed earlier, remove
+  it from git once with `git rm --cached -r storage` and commit.
+- Before a public launch (Phase B) this is reviewed: hosting, database plan, backups and monitoring.

@@ -3,3 +3,5 @@ node_modules
 .env
 *.log
 next-env.d.ts
+# background photos and generated files stay on this computer
+storage/
