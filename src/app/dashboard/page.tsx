@@ -5,6 +5,8 @@ import { botLink, sendDocument, sendMessage } from "@/lib/telegram";
 import { renderSamplePost } from "@/lib/render";
 import { LEAGUES } from "@/lib/leagues";
 import { encryptSecret, userBotToken } from "@/lib/crypto";
+import { deleteAccountFiles } from "@/lib/backgrounds";
+import { clearSessionCookie, requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -38,30 +40,41 @@ const BOT_MESSAGES: Record<string, string> = {
   secret: "The server setting APP_SECRET is missing, so the token cannot be stored safely.",
 };
 
-function back(email: string, extra = ""): string {
-  return `/dashboard?email=${encodeURIComponent(email)}${extra}`;
+const PAGE_MESSAGES: Record<string, { ok: boolean; text: string }> = {
+  saved: { ok: true, text: "Page name saved." },
+  name: { ok: false, text: "Please enter a page name (up to 60 characters)." },
+  notfound: { ok: false, text: "That page was not found." },
+};
+
+const ACCOUNT_MESSAGES: Record<string, string> = {
+  confirm: "The email you typed does not match this account. Nothing was deleted.",
+  busy: "A post is being created for you right now. Please try again in a minute.",
+};
+
+// extra looks like "&bot=ok"; the account comes from the login session, never from the URL.
+function back(extra = ""): string {
+  const query = extra.replace(/^&/, "");
+  return query ? `/dashboard?${query}` : "/dashboard";
 }
 
-async function createLink(formData: FormData) {
+async function createLink() {
   "use server";
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (user && !user.linkCode) {
+  const user = await requireUser();
+  if (!user.linkCode) {
     await prisma.user.update({
       where: { id: user.id },
       data: { linkCode: randomUUID().replace(/-/g, "") },
     });
   }
-  redirect(back(email));
+  redirect(back());
 }
 
-async function sendTest(formData: FormData) {
+async function sendTest() {
   "use server";
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await requireUser();
 
   let result = "nochat";
-  if (user?.telegramChatId) {
+  if (user.telegramChatId) {
     try {
       await sendMessage(user.telegramChatId, "Test message from Final Whistle. Your chat is connected.", userBotToken(user));
       result = "ok";
@@ -70,22 +83,23 @@ async function sendTest(formData: FormData) {
       result = "fail";
     }
   }
-  redirect(back(email, `&test=${result}`));
+  redirect(back(`&test=${result}`));
 }
 
 // Renders a sample post for the user's newest page (sample match, their page name and
 // background) with the local render server and sends it to their Telegram chat.
-async function sendSample(formData: FormData) {
+async function sendSample() {
   "use server";
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const account = await requireUser();
   const user = await prisma.user.findUnique({
-    where: { email },
+    where: { id: account.id },
     include: { brands: { orderBy: { createdAt: "desc" }, take: 1 } },
   });
+  if (!user) redirect("/login");
 
   let result = "nochat";
-  const brand = user?.brands[0];
-  if (user?.telegramChatId && brand) {
+  const brand = user.brands[0];
+  if (user.telegramChatId && brand) {
     try {
       const jpgPath = await renderSamplePost(brand);
       await sendDocument(user.telegramChatId, jpgPath, `Sample post for ${brand.name}`, userBotToken(user));
@@ -95,18 +109,16 @@ async function sendSample(formData: FormData) {
       result = "fail";
     }
   }
-  redirect(back(email, `&sample=${result}`));
+  redirect(back(`&sample=${result}`));
 }
 
 // Saves the customer's OWN Telegram bot (created with @BotFather). The token is stored encrypted.
 async function connectBot(formData: FormData) {
   "use server";
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const user = await requireUser();
   const token = String(formData.get("token") ?? "").trim();
-  if (!/^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(token)) redirect(back(email, "&bot=format"));
+  if (!/^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(token)) redirect(back("&bot=format"));
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) redirect(back(email));
 
   let me: { ok?: boolean; result?: { id: number; username?: string } } | null = null;
   try {
@@ -115,19 +127,19 @@ async function connectBot(formData: FormData) {
   } catch {
     me = null;
   }
-  if (!me) redirect(back(email, "&bot=net"));
-  if (!me.ok || !me.result) redirect(back(email, "&bot=invalid"));
+  if (!me) redirect(back("&bot=net"));
+  if (!me.ok || !me.result) redirect(back("&bot=invalid"));
 
   let encrypted = "";
   try {
     encrypted = encryptSecret(token);
   } catch {
-    redirect(back(email, "&bot=secret"));
+    redirect(back("&bot=secret"));
   }
 
   const botId = String(me.result.id);
   const taken = await prisma.user.findFirst({ where: { botId, NOT: { id: user.id } } });
-  if (taken) redirect(back(email, "&bot=taken"));
+  if (taken) redirect(back("&bot=taken"));
 
   // A new bot means a new chat: the first person who presses Start in it becomes the owner's chat.
   await prisma.user.update({
@@ -141,28 +153,23 @@ async function connectBot(formData: FormData) {
       linkCode: null,
     },
   });
-  redirect(back(email, "&bot=ok"));
+  redirect(back("&bot=ok"));
 }
 
-async function disconnectBot(formData: FormData) {
+async function disconnectBot() {
   "use server";
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (user) {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { botToken: null, botId: null, botUsername: null, telegramChatId: null, telegramLinkedAt: null },
-    });
-  }
-  redirect(back(email, "&bot=removed"));
+  const user = await requireUser();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { botToken: null, botId: null, botUsername: null, telegramChatId: null, telegramLinkedAt: null },
+  });
+  redirect(back("&bot=removed"));
 }
 
 // Saves which leagues and clubs the customer follows (used by /matches in Telegram).
 async function saveFilters(formData: FormData) {
   "use server";
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) redirect(back(email));
+  const user = await requireUser();
 
   const leagueIds = formData
     .getAll("leagues")
@@ -181,35 +188,66 @@ async function saveFilters(formData: FormData) {
   if (teams.length) {
     await prisma.favoriteTeam.createMany({ data: teams.map((t) => ({ userId: user.id, teamId: t.id })), skipDuplicates: true });
   }
-  redirect(back(email, "&saved=1"));
+  redirect(back("&saved=1"));
+}
+
+// A page (brand) may only be changed by the account it belongs to.
+async function renamePage(formData: FormData) {
+  "use server";
+  const user = await requireUser();
+  const brandId = String(formData.get("brandId") ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+
+  const brand = brandId ? await prisma.brand.findFirst({ where: { id: brandId, userId: user.id } }) : null;
+  if (!brand) redirect(back("&page=notfound"));
+  if (!name || name.length > 60) redirect(back("&page=name"));
+
+  await prisma.brand.update({ where: { id: brand.id }, data: { name } });
+  redirect(back("&page=saved"));
+}
+
+// Deletes the account and everything that belongs to it. Pages, subscriptions, selections and
+// followed clubs go with the user row (onDelete: Cascade in the schema). The shared Match and Team
+// tables are not touched. The bot manager notices the missing bot token within 30 seconds.
+async function deleteAccount(formData: FormData) {
+  "use server";
+  const account = await requireUser();
+  const typed = String(formData.get("confirm") ?? "").trim().toLowerCase();
+
+  const user = await prisma.user.findUnique({
+    where: { id: account.id },
+    include: {
+      brands: { select: { id: true, backgroundPath: true } },
+      selections: { select: { status: true, backgroundPath: true } },
+    },
+  });
+  if (!user) redirect("/login");
+  if (typed !== user.email) redirect(back("&acct=confirm"));
+  if (user.selections.some((s) => s.status === "SENDING")) redirect(back("&acct=busy"));
+
+  await deleteAccountFiles(user); // files first: once the rows are gone the paths are lost
+  await prisma.user.delete({ where: { id: user.id } }); // sessions go with it (cascade)
+  await clearSessionCookie();
+  redirect("/login?deleted=1");
 }
 
 export default async function Dashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ email?: string; test?: string; sample?: string; saved?: string; bot?: string }>;
+  searchParams: Promise<{
+    test?: string;
+    sample?: string;
+    saved?: string;
+    bot?: string;
+    page?: string;
+    acct?: string;
+  }>;
 }) {
-  const { email, test, sample, saved, bot } = await searchParams;
+  const { test, sample, saved, bot, page, acct } = await searchParams;
 
-  if (!email) {
-    return (
-      <>
-        <h1>Dashboard</h1>
-        <form action="/dashboard" method="get">
-          <label htmlFor="email">
-            Your email
-            <input id="email" name="email" type="email" required />
-          </label>
-          <button type="submit">Open dashboard</button>
-        </form>
-        <p className="notice">Demo build: no passwords yet, the email is the only identifier.</p>
-      </>
-    );
-  }
-
-  const normalized = email.trim().toLowerCase();
+  const account = await requireUser();
   const user = await prisma.user.findUnique({
-    where: { email: normalized },
+    where: { id: account.id },
     include: {
       brands: { orderBy: { createdAt: "desc" } },
       selections: { orderBy: { createdAt: "desc" }, take: 30, include: { match: true } },
@@ -217,17 +255,7 @@ export default async function Dashboard({
       favoriteTeams: true,
     },
   });
-
-  if (!user) {
-    return (
-      <>
-        <h1>Dashboard</h1>
-        <p>
-          No account found for <strong>{email}</strong>. <a href="/signup">Create one</a>.
-        </p>
-      </>
-    );
-  }
+  if (!user) redirect("/login");
 
   const link = user.linkCode ? botLink(user.linkCode) : null;
   const chosenLeagues = new Set(user.subscriptions[0]?.leagueIds ?? []);
@@ -239,14 +267,12 @@ export default async function Dashboard({
       <strong>Connected</strong>
       <small>Posts will be delivered to your Telegram chat.</small>
       <form action={sendTest} style={{ marginTop: 12 }}>
-        <input type="hidden" name="email" value={user.email} />
         <button type="submit">Send a test message</button>
       </form>
       {test === "ok" && <p>Test message sent. Check Telegram.</p>}
       {test === "fail" && <p className="error">Sending failed. See the terminal where `npm run dev` runs.</p>}
 
       <form action={sendSample} style={{ marginTop: 12 }}>
-        <input type="hidden" name="email" value={user.email} />
         <button type="submit">Send a sample post</button>
       </form>
       <small>Takes a few seconds. The render server must be running (port 4500).</small>
@@ -267,7 +293,6 @@ export default async function Dashboard({
     <div className="card">
       <strong>Not connected</strong>
       <form action={createLink} style={{ marginTop: 12 }}>
-        <input type="hidden" name="email" value={user.email} />
         <button type="submit">Create Telegram connect link</button>
       </form>
     </div>
@@ -311,7 +336,6 @@ export default async function Dashboard({
             </div>
           )}
           <form action={disconnectBot}>
-            <input type="hidden" name="email" value={user.email} />
             <button type="submit">Disconnect this bot</button>
           </form>
         </>
@@ -328,7 +352,6 @@ export default async function Dashboard({
               3. Paste it below. Never share this token with anyone.
             </small>
             <form action={connectBot} style={{ marginTop: 12 }}>
-              <input type="hidden" name="email" value={user.email} />
               <input type="text" name="token" placeholder="123456789:ABC..." autoComplete="off" required />
               <button type="submit">Connect my bot</button>
             </form>
@@ -337,19 +360,30 @@ export default async function Dashboard({
       )}
 
       <h2>Pages</h2>
-      {user.brands.map((b) => (
+      {page && PAGE_MESSAGES[page] && <p className={PAGE_MESSAGES[page].ok ? "notice" : "error"}>{PAGE_MESSAGES[page].text}</p>}
+      {user.brands.map((b, i) => (
         <div className="card" key={b.id}>
-          <strong>{b.name}</strong>
+          <strong>
+            {b.name}
+            {i === 0 ? " (in use)" : ""}
+          </strong>
           <small>
             Backgrounds are sent per match in Telegram: select a match, then send the photo you want behind it.
           </small>
+          <form action={renamePage} style={{ marginTop: 12 }}>
+            <input type="hidden" name="brandId" value={b.id} />
+            <label htmlFor={`name-${b.id}`}>
+              Page name shown on the image
+              <input id={`name-${b.id}`} name="name" type="text" defaultValue={b.name} maxLength={60} required />
+            </label>
+            <button type="submit">Save name</button>
+          </form>
         </div>
       ))}
 
       <h2>Leagues and clubs</h2>
       <small>/matches in Telegram shows matches of the leagues you tick, plus any match of the clubs you tick.</small>
       <form action={saveFilters}>
-        <input type="hidden" name="email" value={user.email} />
         {LEAGUES.map((l) => {
           const clubs = allTeams.filter((t) => t.leagueId === l.id);
           return (
@@ -400,6 +434,24 @@ export default async function Dashboard({
           </div>
         );
       })}
+
+      <h2>Delete account</h2>
+      <div className="card">
+        <small>
+          This permanently deletes your pages, your saved bot token, your selected matches and the background photos
+          stored for you. The bot itself stays in @BotFather. It cannot be undone.
+        </small>
+        {acct && ACCOUNT_MESSAGES[acct] && <p className="error">{ACCOUNT_MESSAGES[acct]}</p>}
+        <form action={deleteAccount} style={{ marginTop: 12 }}>
+          <label htmlFor="confirm">
+            Type your email ({user.email}) to confirm
+            <input id="confirm" name="confirm" type="text" autoComplete="off" required />
+          </label>
+          <button type="submit" style={{ background: "#b3261e" }}>
+            Delete my account
+          </button>
+        </form>
+      </div>
     </>
   );
 }

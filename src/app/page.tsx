@@ -12,7 +12,7 @@ export default function Home() {
         </a>
       </p>
       <p className="notice">
-        Demo build. There are no passwords or payments yet; accounts are identified by email only.
+        Demo build for testing. There are no payments yet.
       </p>
     </>
   );

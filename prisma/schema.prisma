@@ -11,6 +11,8 @@ model User {
   id            String         @id @default(cuid())
   email         String         @unique
   name          String?
+  // Scrypt hash of the password (see src/lib/password.ts). Empty only for test accounts made before logins existed.
+  passwordHash  String?
   // Telegram connection: linkCode goes into the t.me/<bot>?start=<code> link,
   // telegramChatId is filled in by the bot when the user opens that link.
   linkCode         String?   @unique
@@ -27,6 +29,19 @@ model User {
   subscriptions Subscription[]
   selections    Selection[]
   favoriteTeams FavoriteTeam[]
+  sessions      Session[]
+}
+
+// A login. The browser holds the random token; only its SHA-256 is stored here.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // The page the posts are made for: name shown on the image + optional background.

@@ -59,3 +59,24 @@ So during the free testing phase:
   photos and other generated files) is also ignored. If a file in `storage/` was committed earlier, remove
   it from git once with `git rm --cached -r storage` and commit.
 - Before a public launch (Phase B) this is reviewed: hosting, database plan, backups and monitoring.
+
+## Dashboard: page name and account deletion
+
+- Each page can be renamed on the dashboard (the name is printed on the post image).
+- "Delete account" removes the user together with pages, subscriptions, selections, followed clubs and the
+  encrypted bot token, and deletes that user's background photos from `storage/backgrounds`. The shared
+  `Match` and `Team` tables are not touched. The running `npm run bot` stops the deleted user's bot within
+  30 seconds. The bot itself stays in @BotFather.
+
+## Login (test phase)
+
+- Accounts use email + password (min. 8 characters). Passwords are stored as scrypt hashes (`src/lib/password.ts`),
+  logins are kept in the `Session` table; the browser only gets a random token in an HttpOnly cookie.
+- The dashboard and all its actions use the logged-in user from that cookie. Nothing is read from the URL or a hidden
+  form field any more, so one account cannot act on another.
+- After pulling this change run `npm run db:push` once (adds `User.passwordHash` and the `Session` table; existing data
+  is kept), then restart `npm run dev`, `npm run bot` and `npm run worker`.
+- Test accounts made before passwords existed have no password and cannot log in. Delete them in `npm run db:studio`
+  (the User row removes its pages, selections etc.) and register again.
+- Not included yet (Phase B): password reset and email confirmation (they need an email service), HTTPS-only cookies
+  behind a real domain (the cookie is already `Secure` when `NODE_ENV=production`), rate limits shared between servers.
