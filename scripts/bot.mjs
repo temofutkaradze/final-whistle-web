@@ -2,17 +2,15 @@
 // Run with:  npm run bot      (keep this window open)
 // Long polling: no public URL / ngrok needed.
 //
-// Two kinds of bots run side by side:
-//   - every customer's OWN bot (token saved on the dashboard, stored encrypted). That bot belongs to
-//     one customer: the first chat that presses Start is bound to the account, everyone else is refused.
-//   - the optional shared demo bot (TELEGRAM_BOT_TOKEN in .env), linked with a code from the dashboard.
-// New / removed customer bots are picked up automatically every 30 seconds.
+// Every customer has their OWN bot (token saved on the dashboard, stored encrypted). There is no shared bot.
+// That bot belongs to one customer: the first chat that presses Start is bound to the account, everyone
+// else is refused. New / removed customer bots are picked up automatically every 10 seconds.
 //
 // Commands:  /matches  today's matches     type a team name -> search     send an image -> background
 // IMPORTANT: a bot that has a webhook (like the one n8n uses) cannot be polled; use new bots.
 
 import { prisma } from "./lib/db.mjs";
-import { makeTelegram, sharedToken } from "./lib/telegram.mjs";
+import { makeTelegram } from "./lib/telegram.mjs";
 import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR } from "./lib/render.mjs";
 import { ensureDay, formatKickoff, localDate } from "./lib/football.mjs";
@@ -35,14 +33,11 @@ const matchButton = (m, selected) => [
   },
 ];
 
-// ctx = { tg, ownerId }   ownerId = the customer who owns this bot, or null for the shared bot.
+// ctx = { tg, ownerId }   ownerId = the customer who owns this bot.
 
 async function findUser(ctx, chatId) {
-  if (ctx.ownerId) {
-    const u = await prisma.user.findUnique({ where: { id: ctx.ownerId } });
-    return u && u.telegramChatId === chatId ? u : null;
-  }
-  return prisma.user.findFirst({ where: { telegramChatId: chatId, botToken: null } });
+  const u = await prisma.user.findUnique({ where: { id: ctx.ownerId } });
+  return u && u.telegramChatId === chatId ? u : null;
 }
 
 async function selectedIds(userId, fixtureIds) {
@@ -93,45 +88,28 @@ async function sendMatchList(ctx, chatId, user, search) {
   });
 }
 
-async function handleStart(ctx, chatId, code) {
+async function handleStart(ctx, chatId) {
   const { tg } = ctx;
 
-  // Customer's own bot: the first chat that presses Start becomes the owner's chat.
-  if (ctx.ownerId) {
-    const owner = await prisma.user.findUnique({ where: { id: ctx.ownerId } });
-    if (!owner) return;
-    if (!owner.telegramChatId) {
-      await prisma.user.update({ where: { id: owner.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
-      await tg.sendMessage(chatId, "Connected! 🎉\n\n" + HELP);
-      console.log(`Linked ${owner.email} to their own bot (chat ${chatId})`);
-    } else if (owner.telegramChatId === chatId) {
-      await tg.sendMessage(chatId, HELP);
-    } else {
-      await tg.sendMessage(chatId, "This bot is private.");
-    }
-    return;
+  // The first chat that presses Start in this customer's bot becomes the owner's chat.
+  const owner = await prisma.user.findUnique({ where: { id: ctx.ownerId } });
+  if (!owner) return;
+  if (!owner.telegramChatId) {
+    await prisma.user.update({ where: { id: owner.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
+    await tg.sendMessage(chatId, "Connected! 🎉\n\n" + HELP);
+    console.log(`Linked ${owner.email} to their own bot (chat ${chatId})`);
+  } else if (owner.telegramChatId === chatId) {
+    await tg.sendMessage(chatId, HELP);
+  } else {
+    await tg.sendMessage(chatId, "This bot is private.");
   }
-
-  // Shared demo bot: link with the code from the dashboard.
-  if (!code) {
-    await tg.sendMessage(chatId, "Open the Connect Telegram link from your Final Whistle dashboard to link this chat.");
-    return;
-  }
-  const user = await prisma.user.findUnique({ where: { linkCode: code } });
-  if (!user || user.botToken) {
-    await tg.sendMessage(chatId, "This link is not valid. Please open the latest link from your dashboard.");
-    return;
-  }
-  await prisma.user.update({ where: { id: user.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
-  await tg.sendMessage(chatId, "Connected! 🎉\n\n" + HELP);
-  console.log(`Linked ${user.email} to chat ${chatId}`);
 }
 
 // A background image arrived (photo or image file).
 async function handleUpload(ctx, msg, chatId) {
   const { tg } = ctx;
   const user = await findUser(ctx, chatId);
-  if (!user) return handleStart(ctx, chatId, null);
+  if (!user) return handleStart(ctx, chatId);
 
   let fileId = null;
   if (msg.document?.mime_type?.startsWith("image/")) fileId = msg.document.file_id;
@@ -251,10 +229,10 @@ async function handle(ctx, update) {
 
   const text = msg.text.trim();
   const start = text.match(/^\/start(?:\s+(\S+))?$/);
-  if (start) return handleStart(ctx, chatId, start[1]);
+  if (start) return handleStart(ctx, chatId);
 
   const user = await findUser(ctx, chatId);
-  if (!user) return handleStart(ctx, chatId, null);
+  if (!user) return handleStart(ctx, chatId);
 
   if (/^\/matches\b/i.test(text)) return sendMatchList(ctx, chatId, user, null);
   if (text.startsWith("/")) return ctx.tg.sendMessage(chatId, HELP);
@@ -305,7 +283,6 @@ const running = new Map(); // token -> { stop, ctx, tg, label }
 
 async function syncBots() {
   const wanted = new Map(); // token -> { ownerId, label }
-  if (sharedToken) wanted.set(sharedToken, { ownerId: null, label: "shared bot" });
 
   const owners = await prisma.user.findMany({ where: { botToken: { not: null } }, select: { id: true, email: true, botToken: true } });
   for (const o of owners) {
@@ -340,7 +317,7 @@ async function main() {
     } catch (e) {
       console.error("syncBots failed:", e.message);
     }
-    await sleep(30000);
+    await sleep(10000);
   }
 }
 

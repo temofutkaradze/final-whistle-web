@@ -3,9 +3,6 @@ import path from "node:path";
 
 import { decryptSecret } from "./crypto.mjs";
 
-// The shared demo bot (optional). Customers can also use their own bot tokens.
-export const sharedToken = process.env.TELEGRAM_BOT_TOKEN || null;
-
 // Everything the scripts need from Telegram, for ONE bot token.
 export function makeTelegram(token) {
   async function api(method, body = {}) {
@@ -53,26 +50,15 @@ export function makeTelegram(token) {
   return { token, api, sendMessage, sendDocument, downloadTelegramFile };
 }
 
-let shared;
-export function sharedTelegram() {
-  if (!sharedToken) return null;
-  shared ??= makeTelegram(sharedToken);
-  return shared;
-}
-
-// The client for one customer: their own bot if they saved a token, otherwise the shared bot.
+// The client for one customer: always their OWN bot (there is no shared bot).
 const cache = new Map();
 export function telegramForUser(user) {
-  if (user.botToken) {
-    const token = decryptSecret(user.botToken);
-    let tg = cache.get(user.id);
-    if (!tg || tg.token !== token) {
-      tg = makeTelegram(token);
-      cache.set(user.id, tg);
-    }
-    return tg;
+  if (!user.botToken) throw new Error("This customer has not connected a bot.");
+  const token = decryptSecret(user.botToken);
+  let tg = cache.get(user.id);
+  if (!tg || tg.token !== token) {
+    tg = makeTelegram(token);
+    cache.set(user.id, tg);
   }
-  const s = sharedTelegram();
-  if (!s) throw new Error("No bot available for this user (no own bot and no TELEGRAM_BOT_TOKEN).");
-  return s;
+  return tg;
 }

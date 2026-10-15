@@ -37,13 +37,15 @@ all customers share the result. Matches older than 48 h are deleted. The API cou
 
 On the dashboard the customer creates a bot with @BotFather and pastes its token. The token is
 stored encrypted (needs `APP_SECRET` in `.env`). `npm run bot` starts one polling loop per customer
-bot and checks for new ones every 30 seconds. The first chat that presses Start in a customer's bot
+bot and checks for new ones every 10 seconds. The first chat that presses Start in a customer's bot
 becomes their chat; everyone else gets "This bot is private." The worker sends each post through the
-customer's own bot.
+customer's own bot. There is no shared bot: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME` in an old
+`.env` are ignored and can be deleted. Accounts that were linked through the old shared bot connect their own bot
+with a token. While the bot window is closed nothing can react to Start, so keep `npm run bot` running when connecting.
 
 ## Testing phase: run the bot and worker only while testing
 
-The bot checks Neon every 30 seconds and the worker every 60 seconds. While either one runs, the
+The bot checks Neon every 10 seconds and the worker every 60 seconds. While either one runs, the
 database never gets idle, so Neon cannot suspend its compute after 5 minutes of inactivity.
 The Neon Free plan includes 100 CU-hours of compute and 0.5 GB of storage per project. If the
 compute runs all day, every day, those 100 CU-hours can be used up before the month ends; then the
@@ -66,7 +68,7 @@ So during the free testing phase:
 - "Delete account" removes the user together with pages, subscriptions, selections, followed clubs and the
   encrypted bot token, and deletes that user's background photos from `storage/backgrounds`. The shared
   `Match` and `Team` tables are not touched. The running `npm run bot` stops the deleted user's bot within
-  30 seconds. The bot itself stays in @BotFather.
+  10 seconds. The bot itself stays in @BotFather.
 
 ## Login (test phase)
 

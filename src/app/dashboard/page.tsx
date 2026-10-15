@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { botLink, sendDocument, sendMessage } from "@/lib/telegram";
+import { sendDocument, sendMessage } from "@/lib/telegram";
 import { renderSamplePost } from "@/lib/render";
 import { LEAGUES } from "@/lib/leagues";
 import { encryptSecret, userBotToken } from "@/lib/crypto";
 import { deleteAccountFiles } from "@/lib/backgrounds";
 import { clearSessionCookie, requireUser } from "@/lib/auth";
+import AutoRefresh from "./auto-refresh";
 
 export const dynamic = "force-dynamic";
 
@@ -57,26 +57,14 @@ function back(extra = ""): string {
   return query ? `/dashboard?${query}` : "/dashboard";
 }
 
-async function createLink() {
-  "use server";
-  const user = await requireUser();
-  if (!user.linkCode) {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { linkCode: randomUUID().replace(/-/g, "") },
-    });
-  }
-  redirect(back());
-}
-
 async function sendTest() {
   "use server";
   const user = await requireUser();
 
   let result = "nochat";
-  if (user.telegramChatId) {
+  if (user.telegramChatId && user.botToken) {
     try {
-      await sendMessage(user.telegramChatId, "Test message from Final Whistle. Your chat is connected.", userBotToken(user));
+      await sendMessage(user.telegramChatId, "Test message from Final Whistle. Your chat is connected.", userBotToken(user) as string);
       result = "ok";
     } catch (e) {
       console.error("sendTest failed:", e);
@@ -99,10 +87,10 @@ async function sendSample() {
 
   let result = "nochat";
   const brand = user.brands[0];
-  if (user.telegramChatId && brand) {
+  if (user.telegramChatId && user.botToken && brand) {
     try {
       const jpgPath = await renderSamplePost(brand);
-      await sendDocument(user.telegramChatId, jpgPath, `Sample post for ${brand.name}`, userBotToken(user));
+      await sendDocument(user.telegramChatId, jpgPath, `Sample post for ${brand.name}`, userBotToken(user) as string);
       result = "ok";
     } catch (e) {
       console.error("sendSample failed:", e);
@@ -257,7 +245,6 @@ export default async function Dashboard({
   });
   if (!user) redirect("/login");
 
-  const link = user.linkCode ? botLink(user.linkCode) : null;
   const chosenLeagues = new Set(user.subscriptions[0]?.leagueIds ?? []);
   const chosenTeams = new Set(user.favoriteTeams.map((f) => f.teamId));
   const allTeams = await prisma.team.findMany({ orderBy: { name: "asc" } });
@@ -286,30 +273,6 @@ export default async function Dashboard({
     </div>
   );
 
-  // Shared demo bot: link with a code (used until the customer connects their own bot).
-  const sharedFlow = user.telegramChatId ? (
-    connectedCard
-  ) : !user.linkCode ? (
-    <div className="card">
-      <strong>Not connected</strong>
-      <form action={createLink} style={{ marginTop: 12 }}>
-        <button type="submit">Create Telegram connect link</button>
-      </form>
-    </div>
-  ) : link ? (
-    <div className="card">
-      <strong>Almost there</strong>
-      <small>Open the link, press Start in Telegram, then reload this page.</small>
-      <p>
-        <a className="btn" href={link} target="_blank" rel="noreferrer">
-          Open Telegram
-        </a>
-      </p>
-    </div>
-  ) : (
-    <p className="error">TELEGRAM_BOT_USERNAME is not set in .env.</p>
-  );
-
   return (
     <>
       <h1>Dashboard</h1>
@@ -327,7 +290,8 @@ export default async function Dashboard({
           ) : (
             <div className="card">
               <strong>Almost there</strong>
-              <small>Open your bot @{user.botUsername}, press Start, then reload this page.</small>
+              <small>Open your bot @{user.botUsername} and press Start. This page updates by itself.</small>
+              <AutoRefresh />
               <p>
                 <a className="btn" href={`https://t.me/${user.botUsername}`} target="_blank" rel="noreferrer">
                   Open @{user.botUsername}
@@ -341,15 +305,16 @@ export default async function Dashboard({
         </>
       ) : (
         <>
-          {sharedFlow}
           <div className="card">
-            <strong>Use your own bot (recommended)</strong>
+            <strong>Connect your Telegram bot</strong>
             <small>
               1. In Telegram open @BotFather, send /newbot and choose a name and a username.
               <br />
               2. Copy the token it gives you (it looks like 123456789:ABC...).
               <br />
               3. Paste it below. Never share this token with anyone.
+              <br />
+              4. Open your bot in Telegram and press Start.
             </small>
             <form action={connectBot} style={{ marginTop: 12 }}>
               <input type="text" name="token" placeholder="123456789:ABC..." autoComplete="off" required />

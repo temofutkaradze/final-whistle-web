@@ -73,7 +73,7 @@ async function tick() {
   const sels = await prisma.selection.findMany({
     where: {
       status: "SELECTED",
-      user: { telegramChatId: { not: null } },
+      user: { telegramChatId: { not: null }, botToken: { not: null } },
       match: { kickoff: { gte: new Date(now - hours(MAX_AGE_HOURS)), lte: new Date(now - minutes(DELAY_MINUTES)) } },
     },
     include: { match: true, user: { include: { brands: { orderBy: { createdAt: "desc" }, take: 1 } } } },
