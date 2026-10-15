@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { LEAGUES } from "@/lib/leagues";
@@ -66,8 +67,9 @@ export default async function SignUp({
   const { error } = await searchParams;
 
   return (
-    <>
-      <h1>Create a demo account</h1>
+    <div className="container auth">
+      <div className="card">
+      <h1>Create your account</h1>
       <p className="lead">Tell us which page the posts are for and which leagues you follow.</p>
       {error && ERRORS[error] && <p className="error">{ERRORS[error]}</p>}
       <form action={createAccount}>
@@ -85,7 +87,8 @@ export default async function SignUp({
         </label>
         <label htmlFor="brandName">
           Page name shown on the image
-          <input id="brandName" name="brandName" type="text" required placeholder="e.g. day on football" />
+          <input id="brandName" name="brandName" type="text" required maxLength={60} placeholder="e.g. your page" />
+          <small>Printed on every post. You can change it later.</small>
         </label>
         <label htmlFor="backgroundUrl">
           Background image link <small>(optional, https://…)</small>
@@ -93,15 +96,26 @@ export default async function SignUp({
         </label>
         <fieldset>
           <legend>Leagues</legend>
+          <div className="chips">
           {LEAGUES.map((l) => (
             <label key={l.id} className="check" htmlFor={`league-${l.id}`}>
               <input id={`league-${l.id}`} type="checkbox" name="leagues" value={l.id} />
               {l.name}
             </label>
           ))}
+          </div>
         </fieldset>
         <button type="submit">Create account</button>
+        <p className="muted">No card needed. You can delete your account at any time.</p>
       </form>
-    </>
+      <p className="muted center" style={{ marginTop: 24 }}>
+        Already have an account? <a href="/login">Log in</a>
+      </p>
+      </div>
+      <aside className="auth-aside">
+        <Image src="/examples/post-bayern-dortmund.jpg" alt="Example result post: Bayern Munich 4-0 Dortmund" width={720} height={900} />
+        <p>Your post, made automatically.</p>
+      </aside>
+    </div>
   );
 }

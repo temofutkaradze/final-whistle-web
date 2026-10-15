@@ -39,7 +39,8 @@ export default async function Login({
   const { error, deleted } = await searchParams;
 
   return (
-    <>
+    <div className="container auth">
+      <div className="card">
       <h1>Log in</h1>
       {deleted === "1" && <p className="notice">Your account and its data were deleted.</p>}
       {error && ERRORS[error] && <p className="error">{ERRORS[error]}</p>}
@@ -61,6 +62,7 @@ export default async function Login({
         Demo build. There is no password reset yet. Accounts created before passwords existed cannot log in; create a
         new one with another email.
       </p>
-    </>
+      </div>
+    </div>
   );
 }

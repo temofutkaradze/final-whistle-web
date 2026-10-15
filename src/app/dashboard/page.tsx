@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { sendDocument, sendMessage } from "@/lib/telegram";
@@ -9,26 +10,6 @@ import { clearSessionCookie, requireUser } from "@/lib/auth";
 import AutoRefresh from "./auto-refresh";
 
 export const dynamic = "force-dynamic";
-
-const TZ = process.env.DISPLAY_TZ || "Asia/Tbilisi";
-
-function formatKickoff(d: Date): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: TZ,
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(d);
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  SELECTED: "Waiting for the match to finish",
-  SENDING: "Creating your post",
-  COMPLETED: "Sent to Telegram",
-  FAILED: "Could not be created",
-};
 
 const BOT_MESSAGES: Record<string, string> = {
   ok: "Bot connected. Open it in Telegram and press Start.",
@@ -238,7 +219,7 @@ export default async function Dashboard({
     where: { id: account.id },
     include: {
       brands: { orderBy: { createdAt: "desc" } },
-      selections: { orderBy: { createdAt: "desc" }, take: 30, include: { match: true } },
+      selections: { select: { id: true }, take: 1 },
       subscriptions: { orderBy: { createdAt: "desc" }, take: 1 },
       favoriteTeams: true,
     },
@@ -249,174 +230,229 @@ export default async function Dashboard({
   const chosenTeams = new Set(user.favoriteTeams.map((f) => f.teamId));
   const allTeams = await prisma.team.findMany({ orderBy: { name: "asc" } });
 
-  const connectedCard = (
-    <div className="card">
-      <strong>Connected</strong>
-      <small>Posts will be delivered to your Telegram chat.</small>
-      <form action={sendTest} style={{ marginTop: 12 }}>
-        <button type="submit">Send a test message</button>
-      </form>
+  const firstSteps = [
+    { done: Boolean(user.botToken && user.telegramChatId), title: "Connect your bot", text: "Open your bot in Telegram and press Start." },
+    { done: chosenLeagues.size > 0, title: "Choose your leagues", text: "Used to build your match list." },
+    { done: user.selections.length > 0, title: "Select a match", text: "Send /matches to your bot and tap a match. The post arrives when it ends." },
+  ];
+
+  const connectedBlock = (
+    <>
+      <div className="row" style={{ marginTop: 8 }}>
+        <span className="pill ok">Connected</span>
+        <span className="muted">@{user.botUsername}</span>
+      </div>
+      <p className="muted" style={{ marginTop: 8 }}>
+        Posts are delivered to your Telegram chat.
+      </p>
+      <div className="row" style={{ marginTop: 16 }}>
+        <form className="plain" action={sendSample}>
+          <button type="submit">Send a sample post</button>
+        </form>
+        <form className="plain" action={sendTest}>
+          <button type="submit" className="ghost">
+            Send a test message
+          </button>
+        </form>
+      </div>
+      <small style={{ marginTop: 10 }}>Takes a few seconds. The render server must be running (port 4500).</small>
       {test === "ok" && <p>Test message sent. Check Telegram.</p>}
       {test === "fail" && <p className="error">Sending failed. See the terminal where `npm run dev` runs.</p>}
-
-      <form action={sendSample} style={{ marginTop: 12 }}>
-        <button type="submit">Send a sample post</button>
-      </form>
-      <small>Takes a few seconds. The render server must be running (port 4500).</small>
       {sample === "ok" && <p>Sample post sent. Check Telegram.</p>}
       {sample === "fail" && (
         <p className="error">
-          Could not create or send the post. Is the render server running? Details are in the terminal where
-          `npm run dev` runs.
+          Could not create or send the post. Is the render server running? Details are in the terminal where `npm run dev` runs.
         </p>
       )}
-    </div>
+    </>
   );
 
-  return (
+  const waitingBlock = (
     <>
+      <p className="muted" style={{ marginTop: 8 }}>
+        Open your bot @{user.botUsername} and press Start. This page updates by itself.
+      </p>
+      <AutoRefresh />
+      <p style={{ marginTop: 16 }}>
+        <a className="btn" href={`https://t.me/${user.botUsername}`} target="_blank" rel="noreferrer">
+          Open @{user.botUsername}
+        </a>
+      </p>
+    </>
+  );
+
+  const connectForm = (
+    <>
+      <small style={{ marginTop: 8 }}>
+        1. In Telegram open @BotFather, send /newbot and choose a name and a username.
+        <br />
+        2. Copy the token it gives you (it looks like 123456789:ABC...).
+        <br />
+        3. Paste it below. Never share this token with anyone.
+        <br />
+        4. Open your bot in Telegram and press Start.
+      </small>
+      <form className="plain" action={connectBot} style={{ marginTop: 16 }}>
+        <input type="text" name="token" placeholder="123456789:ABC..." autoComplete="off" required aria-label="Bot token" />
+        <button type="submit">Connect my bot</button>
+      </form>
+    </>
+  );
+
+  const allDone = firstSteps.every((st) => st.done);
+  const brand = user.brands[0];
+
+  return (
+    <div className="container dash-page">
       <h1>Dashboard</h1>
       <p className="lead">
         {user.name ? `${user.name} · ` : ""}
         {user.email}
       </p>
 
-      <h2>Telegram</h2>
-      {bot && BOT_MESSAGES[bot] && <p className={bot === "ok" || bot === "removed" ? "" : "error"}>{BOT_MESSAGES[bot]}</p>}
-      {user.botToken ? (
-        <>
-          {user.telegramChatId ? (
-            connectedCard
-          ) : (
-            <div className="card">
-              <strong>Almost there</strong>
-              <small>Open your bot @{user.botUsername} and press Start. This page updates by itself.</small>
-              <AutoRefresh />
-              <p>
-                <a className="btn" href={`https://t.me/${user.botUsername}`} target="_blank" rel="noreferrer">
-                  Open @{user.botUsername}
-                </a>
-              </p>
-            </div>
-          )}
-          <form action={disconnectBot}>
-            <button type="submit">Disconnect this bot</button>
-          </form>
-        </>
-      ) : (
-        <>
-          <div className="card">
-            <strong>Connect your Telegram bot</strong>
-            <small>
-              1. In Telegram open @BotFather, send /newbot and choose a name and a username.
-              <br />
-              2. Copy the token it gives you (it looks like 123456789:ABC...).
-              <br />
-              3. Paste it below. Never share this token with anyone.
-              <br />
-              4. Open your bot in Telegram and press Start.
-            </small>
-            <form action={connectBot} style={{ marginTop: 12 }}>
-              <input type="text" name="token" placeholder="123456789:ABC..." autoComplete="off" required />
-              <button type="submit">Connect my bot</button>
-            </form>
-          </div>
-        </>
+      {!allDone && (
+        <section className="card" aria-labelledby="first-post" style={{ marginTop: 24 }}>
+          <strong id="first-post">Get your first post</strong>
+          <ol className="todo">
+            {firstSteps.map((st) => (
+              <li key={st.title}>
+                <span className={st.done ? "dot done" : "dot"} aria-hidden="true">
+                  {st.done && (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 7.5l2.5 2.5L11 4" />
+                    </svg>
+                  )}
+                </span>
+                <div>
+                  <b>
+                    {st.title}
+                    {st.done ? " (done)" : ""}
+                  </b>
+                  <span className="t">{st.text}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
 
-      <h2>Pages</h2>
-      {page && PAGE_MESSAGES[page] && <p className={PAGE_MESSAGES[page].ok ? "notice" : "error"}>{PAGE_MESSAGES[page].text}</p>}
-      {user.brands.map((b, i) => (
-        <div className="card" key={b.id}>
-          <strong>
-            {b.name}
-            {i === 0 ? " (in use)" : ""}
-          </strong>
-          <small>
-            Backgrounds are sent per match in Telegram: select a match, then send the photo you want behind it.
-          </small>
-          <form action={renamePage} style={{ marginTop: 12 }}>
-            <input type="hidden" name="brandId" value={b.id} />
-            <label htmlFor={`name-${b.id}`}>
-              Page name shown on the image
-              <input id={`name-${b.id}`} name="name" type="text" defaultValue={b.name} maxLength={60} required />
+      <div className="dash">
+        <section className="card" aria-labelledby="t-tg">
+          <h2 className="card-title" id="t-tg">
+            Telegram
+          </h2>
+          {bot && BOT_MESSAGES[bot] && <p className={bot === "ok" || bot === "removed" ? "" : "error"}>{BOT_MESSAGES[bot]}</p>}
+          {user.botToken ? (
+            <>
+              {user.telegramChatId ? connectedBlock : waitingBlock}
+              <form className="plain" action={disconnectBot} style={{ marginTop: 18 }}>
+                <button type="submit" className="ghost sm">
+                  Disconnect this bot
+                </button>
+              </form>
+            </>
+          ) : (
+            connectForm
+          )}
+        </section>
+
+        <section className="card" aria-labelledby="t-page">
+          <h2 className="card-title" id="t-page">
+            Page
+          </h2>
+          <p className="muted">The name printed on every post.</p>
+          {page && PAGE_MESSAGES[page] && <p className={PAGE_MESSAGES[page].ok ? "notice" : "error"}>{PAGE_MESSAGES[page].text}</p>}
+          {brand && (
+            <form className="plain" action={renamePage} style={{ marginTop: 16 }}>
+              <input type="hidden" name="brandId" value={brand.id} />
+              <label htmlFor={`name-${brand.id}`}>
+                Page name
+                <input id={`name-${brand.id}`} name="name" type="text" defaultValue={brand.name} maxLength={60} required />
+              </label>
+              <button type="submit">Save name</button>
+            </form>
+          )}
+        </section>
+
+        <section className="card wide" aria-labelledby="t-tpl">
+          <h2 className="card-title" id="t-tpl">
+            Template
+          </h2>
+          <p className="muted">The look of every post.</p>
+          <div className="tpl-grid">
+            <div className="tpl on">
+              <Image src="/examples/post-bayern-dortmund.jpg" alt="Classic template preview" width={720} height={900} />
+              <span className="tpl-name">Classic</span>
+              <span className="pill ok">In use</span>
+            </div>
+            <div className="tpl soon">More templates are on the way.</div>
+          </div>
+        </section>
+
+        <details className="card wide leagues">
+          <summary>
+            <span className="card-title">Leagues and clubs</span>
+            <span className="muted">
+              {chosenLeagues.size} {chosenLeagues.size === 1 ? "league" : "leagues"} · {chosenTeams.size}{" "}
+              {chosenTeams.size === 1 ? "club" : "clubs"}
+            </span>
+          </summary>
+          <p className="muted" style={{ marginTop: 4 }}>
+            /matches in Telegram shows the matches of the leagues you tick, plus any match of the clubs you tick.
+          </p>
+          <form className="plain" action={saveFilters} style={{ marginTop: 12 }}>
+            <div>
+              {LEAGUES.map((l) => {
+                const clubs = allTeams.filter((t) => t.leagueId === l.id);
+                return (
+                  <details key={l.id} className="lrow">
+                    <summary>
+                      <label className="check" style={{ display: "inline-flex", padding: 0 }}>
+                        <input type="checkbox" name="leagues" value={l.id} defaultChecked={chosenLeagues.has(l.id)} />
+                        {l.name}
+                      </label>
+                    </summary>
+                    {clubs.length === 0 ? (
+                      <small>No clubs loaded for this league yet.</small>
+                    ) : (
+                      <div className="clubs">
+                        {clubs.map((t) => (
+                          <label className="check" key={t.id}>
+                            <input type="checkbox" name="teams" value={t.id} defaultChecked={chosenTeams.has(t.id)} />
+                            {t.name}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </details>
+                );
+              })}
+            </div>
+            <button type="submit">Save</button>
+            {saved === "1" && <p>Saved. Send /matches in Telegram to see the new list.</p>}
+          </form>
+        </details>
+      </div>
+
+      <details className="danger">
+        <summary>Delete account</summary>
+        <div style={{ paddingBottom: 24, maxWidth: 560 }}>
+          <p className="muted">
+            This permanently deletes your pages, your saved bot token, your selected matches and the background photos
+            stored for you. The bot itself stays in @BotFather. It cannot be undone.
+          </p>
+          {acct && ACCOUNT_MESSAGES[acct] && <p className="error">{ACCOUNT_MESSAGES[acct]}</p>}
+          <form action={deleteAccount} style={{ marginTop: 12 }}>
+            <label htmlFor="confirm">
+              Type your email ({user.email}) to confirm
+              <input id="confirm" name="confirm" type="text" autoComplete="off" required />
             </label>
-            <button type="submit">Save name</button>
+            <button type="submit" className="ghost danger-btn">
+              Delete my account
+            </button>
           </form>
         </div>
-      ))}
-
-      <h2>Leagues and clubs</h2>
-      <small>/matches in Telegram shows matches of the leagues you tick, plus any match of the clubs you tick.</small>
-      <form action={saveFilters}>
-        {LEAGUES.map((l) => {
-          const clubs = allTeams.filter((t) => t.leagueId === l.id);
-          return (
-            <details key={l.id} className="card">
-              <summary>
-                <label className="check" style={{ display: "inline-flex" }}>
-                  <input type="checkbox" name="leagues" value={l.id} defaultChecked={chosenLeagues.has(l.id)} />
-                  <strong style={{ display: "inline" }}>{l.name}</strong>
-                </label>
-              </summary>
-              {clubs.length === 0 ? (
-                <small>No clubs loaded for this league yet.</small>
-              ) : (
-                <div className="clubs">
-                  {clubs.map((t) => (
-                    <label className="check" key={t.id}>
-                      <input type="checkbox" name="teams" value={t.id} defaultChecked={chosenTeams.has(t.id)} />
-                      {t.name}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </details>
-          );
-        })}
-        <button type="submit">Save</button>
-        {saved === "1" && <p>Saved. Send /matches in Telegram to see the new list.</p>}
-      </form>
-
-      <h2>My matches</h2>
-      <small>Pick matches in Telegram with /matches. This list updates when you reload the page.</small>
-      {user.selections.length === 0 && <p>No matches selected yet.</p>}
-      {user.selections.map((sel) => {
-        const m = sel.match;
-        const finished = m.homeScore !== null && m.awayScore !== null && ["FT", "AET", "PEN"].includes(m.statusShort);
-        return (
-          <div className="card" key={sel.id}>
-            <strong>
-              {m.homeTeam} {finished ? `${m.homeScore} - ${m.awayScore}` : "-"} {m.awayTeam}
-            </strong>
-            <small>
-              {m.leagueName} · {formatKickoff(m.kickoff)}
-            </small>
-            <div className="pills">
-              <span className="pill">{STATUS_LABEL[sel.status] ?? sel.status}</span>
-              {sel.backgroundPath && <span className="pill">Custom background</span>}
-            </div>
-          </div>
-        );
-      })}
-
-      <h2>Delete account</h2>
-      <div className="card">
-        <small>
-          This permanently deletes your pages, your saved bot token, your selected matches and the background photos
-          stored for you. The bot itself stays in @BotFather. It cannot be undone.
-        </small>
-        {acct && ACCOUNT_MESSAGES[acct] && <p className="error">{ACCOUNT_MESSAGES[acct]}</p>}
-        <form action={deleteAccount} style={{ marginTop: 12 }}>
-          <label htmlFor="confirm">
-            Type your email ({user.email}) to confirm
-            <input id="confirm" name="confirm" type="text" autoComplete="off" required />
-          </label>
-          <button type="submit" style={{ background: "#b3261e" }}>
-            Delete my account
-          </button>
-        </form>
-      </div>
-    </>
+      </details>
+    </div>
   );
 }

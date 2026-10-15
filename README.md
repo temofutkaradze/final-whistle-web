@@ -82,3 +82,27 @@ So during the free testing phase:
   (the User row removes its pages, selections etc.) and register again.
 - Not included yet (Phase B): password reset and email confirmation (they need an email service), HTTPS-only cookies
   behind a real domain (the cookie is already `Secure` when `NODE_ENV=production`), rate limits shared between servers.
+
+## Design
+
+- Styles are in `src/app/globals.css` (plain CSS, no extra packages). Fonts (Instrument Serif, Manrope) are loaded from
+  Google Fonts in `src/app/layout.tsx`, so the pages need an internet connection to show them exactly; without it a
+  system font is used.
+- `public/examples/` holds three sample post images for the landing and sign-up pages. They are placeholders for the
+  testing phase (they show a real player and club logos). Replace them with your own images before a public launch.
+
+## Light / dark theme and site texts
+
+- The header has a light/dark switch. Until a visitor uses it, the site follows the device setting; the choice is
+  remembered in the browser (`localStorage`, key `fw-theme`). Colours are variables at the top of `src/app/globals.css`
+  (`:root` for light, `:root[data-theme="dark"]` and the `prefers-color-scheme` block for dark).
+- All texts of the public pages (name, headline, steps, FAQ, example images) are in `src/lib/site.ts`. For another
+  topic (another sport, films, crypto...) change that file and the pictures in `public/examples`; the design stays the same.
+  The product itself still only produces football result posts.
+
+## What the dashboard is for
+
+Everything about a match happens in Telegram (`/matches`, tap the matches, send a background if you like). The site is only
+for the settings that stay the same: connecting the bot, the page name, the template and the leagues/clubs shown by
+`/matches`. The leagues list is collapsed by default.
+
