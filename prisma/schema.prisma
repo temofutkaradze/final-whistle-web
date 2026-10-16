@@ -52,6 +52,11 @@ model Brand {
   backgroundUrl String?
   // Image uploaded from the dashboard (file on this computer, storage/backgrounds).
   backgroundPath String?
+  // Look of the posts: which template, and whether the top corner shows the page name or the page logo.
+  templateRef   String   @default("classic")
+  brandMode     String   @default("text") // "text" or "logo"
+  // Logo uploaded from the dashboard (file on this computer, storage/logos).
+  logoPath      String?
   createdAt     DateTime @default(now())
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

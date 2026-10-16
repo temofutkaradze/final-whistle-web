@@ -11,13 +11,16 @@
     "bot": "node --env-file=.env scripts/bot.mjs",
     "postinstall": "prisma generate",
     "worker": "node --env-file=.env scripts/worker.mjs",
-    "seed:teams": "node --env-file=.env scripts/seed-teams.mjs"
+    "seed:teams": "node --env-file=.env scripts/seed-teams.mjs",
+    "render": "node --env-file=.env render/render-server.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
     "next": "^15.5.0",
+    "playwright": "^1.64.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

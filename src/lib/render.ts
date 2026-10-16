@@ -1,8 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { logoDataUri } from "@/lib/logos";
 
 // Where the local render server (render-server.js) listens.
-const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://localhost:4500/render";
+const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://127.0.0.1:4500/render";
 
 // Customer backgrounds are downloaded here (inside this project).
 const BACKGROUND_DIR = path.join(process.cwd(), "storage", "backgrounds");
@@ -98,20 +99,32 @@ export async function downloadBackground(brandId: string, url: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Render a sample post for a customer's page. Returns the JPG path on this computer.
+// The look of a customer's posts: which template, and the page name or the page logo.
+// Used for the sample post and (same idea in scripts/lib/render.mjs) for real posts.
 // ---------------------------------------------------------------------------
 
-export async function renderSamplePost(brand: {
-  id: string;
+export type BrandLook = {
   name: string;
-  backgroundUrl: string | null;
-}): Promise<string> {
-  const backgroundPath = brand.backgroundUrl ? await downloadBackground(brand.id, brand.backgroundUrl) : null;
+  templateRef: string;
+  brandMode: string;
+  logoPath: string | null;
+};
 
-  const payload = {
-    fixture_id: `sample_${brand.id}`,
+export async function brandLookFields(brand: BrandLook): Promise<{ template: string; page_name: string; page_logo_data_uri?: string }> {
+  const fields: { template: string; page_name: string; page_logo_data_uri?: string } = {
+    template: brand.templateRef || "classic",
     page_name: pageNameForImage(brand.name),
-    ...(backgroundPath ? { background_path: backgroundPath } : { background_data_uri: DEFAULT_BACKGROUND }),
+  };
+  if (brand.brandMode === "logo") {
+    const uri = await logoDataUri(brand.logoPath);
+    if (uri) fields.page_logo_data_uri = uri; // no file (or unreadable): the page name is shown instead
+  }
+  return fields;
+}
+
+// The invented sample match. Used by the sample post and by the template previews on the dashboard.
+export function sampleMatchFields() {
+  return {
     league_logo: SAMPLE_LEAGUE_LOGO,
     home_logo: teamBadge("A", "#1b7a4f"),
     away_logo: teamBadge("B", "#24407a"),
@@ -122,6 +135,26 @@ export async function renderSamplePost(brand: {
     total_events: 3,
     home_events_html: homeEvent("12", "J. Sample") + homeEvent("67", "K. Demo"),
     away_events_html: awayEvent("81", "L. Test"),
+    background_data_uri: DEFAULT_BACKGROUND,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Render a sample post for a customer's page. Returns the JPG path on this computer.
+// ---------------------------------------------------------------------------
+
+export async function renderSamplePost(brand: BrandLook & {
+  id: string;
+  backgroundUrl: string | null;
+}): Promise<string> {
+  const backgroundPath = brand.backgroundUrl ? await downloadBackground(brand.id, brand.backgroundUrl) : null;
+  const sample = sampleMatchFields();
+
+  const payload = {
+    ...sample,
+    fixture_id: `sample_${brand.id}`,
+    ...(await brandLookFields(brand)),
+    ...(backgroundPath ? { background_path: backgroundPath, background_data_uri: undefined } : {}),
   };
 
   const res = await fetch(RENDER_URL, {

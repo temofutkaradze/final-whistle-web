@@ -5,3 +5,8 @@ node_modules
 next-env.d.ts
 # background photos and generated files stay on this computer
 storage/
+
+# render server work files (generated)
+render/cache/
+render/rendered/
+render/output/

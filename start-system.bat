@@ -2,7 +2,7 @@
 rem Starts everything the site needs, each in its own named tab of ONE Windows Terminal window.
 rem Close the whole terminal window to stop everything.
 
-wt -w 0 new-tab --title "Render" --suppressApplicationTitle -d "C:\football-bot\render" cmd /k "node render-server.js"
+wt -w 0 new-tab --title "Render" --suppressApplicationTitle -d "C:\final-whistle-web" cmd /k "npm run render"
 timeout /t 2 /nobreak >nul
 
 wt -w 0 new-tab --title "Site" --suppressApplicationTitle -d "C:\final-whistle-web" cmd /k "npm run dev"

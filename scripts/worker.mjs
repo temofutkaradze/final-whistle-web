@@ -12,7 +12,7 @@ import { unlink } from "node:fs/promises";
 import { prisma } from "./lib/db.mjs";
 import { telegramForUser } from "./lib/telegram.mjs";
 import { buildEventsHtml } from "./lib/events.mjs";
-import { DEFAULT_BACKGROUND, downloadBackground, fileExists, pageNameForImage, renderPost } from "./lib/render.mjs";
+import { DEFAULT_BACKGROUND, brandLookFields, downloadBackground, fileExists, renderPost } from "./lib/render.mjs";
 import { fetchEventsOnce, isDead, isFinished, localDate, refreshStatuses } from "./lib/football.mjs";
 import {
   CHECK_INTERVAL_MIN,
@@ -54,7 +54,7 @@ async function sendOne(sel, match, eventsHtml) {
   const brand = sel.user.brands[0];
   const jpg = await renderPost({
     fixture_id: `${match.fixtureId}_${sel.id}`, // unique per customer, so files never collide
-    page_name: pageNameForImage(brand?.name ?? "final whistle"),
+    ...(await brandLookFields(brand)),
     ...(await pickBackground(sel, brand)),
     league_logo: match.leagueLogo,
     home_logo: match.homeLogo,

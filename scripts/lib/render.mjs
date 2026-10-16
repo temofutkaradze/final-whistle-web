@@ -1,7 +1,7 @@
-import { mkdir, writeFile, access } from "node:fs/promises";
+import { mkdir, writeFile, access, readFile } from "node:fs/promises";
 import path from "node:path";
 
-const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://localhost:4500/render";
+const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://127.0.0.1:4500/render";
 
 export const BACKGROUND_DIR = path.join(process.cwd(), "storage", "backgrounds");
 
@@ -23,6 +23,29 @@ export function pageNameForImage(name) {
     .slice(0, 4)
     .map((w) => w.slice(0, 16))
     .join("\n");
+}
+
+// The look of a customer's posts: the template and the page name, or the page logo (saved by the dashboard in
+// storage/logos). No logo file (or logo mode off) means the page name is shown.
+const LOGO_DIR = path.join(process.cwd(), "storage", "logos");
+
+export async function brandLookFields(brand) {
+  const fields = {
+    template: brand?.templateRef || "classic",
+    page_name: pageNameForImage(brand?.name ?? "final whistle"),
+  };
+  if (brand?.brandMode === "logo" && brand.logoPath) {
+    const rel = path.relative(LOGO_DIR, path.resolve(brand.logoPath));
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      try {
+        const buf = await readFile(brand.logoPath);
+        if (buf.length <= 2_000_000) fields.page_logo_data_uri = `data:image/png;base64,${buf.toString("base64")}`;
+      } catch {
+        /* missing file: the page name is shown instead */
+      }
+    }
+  }
+  return fields;
 }
 
 export async function fileExists(p) {

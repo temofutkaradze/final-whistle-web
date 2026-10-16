@@ -1,5 +1,6 @@
 import { unlink } from "node:fs/promises";
 import path from "node:path";
+import { deleteLogoFile } from "@/lib/logos";
 
 // Safe deletion of background files. Everything lives in storage/backgrounds
 // (the folder the bot and worker already use for photos sent in Telegram).
@@ -28,7 +29,7 @@ export async function deleteDownloadedBackground(brandId: string): Promise<void>
 // the photos chosen for matches, and downloaded page backgrounds.
 export async function deleteAccountFiles(data: {
   pendingBackgroundPath: string | null;
-  brands: { id: string; backgroundPath: string | null }[];
+  brands: { id: string; backgroundPath: string | null; logoPath: string | null }[];
   selections: { backgroundPath: string | null }[];
 }): Promise<void> {
   const paths = new Set<string>();
@@ -37,4 +38,5 @@ export async function deleteAccountFiles(data: {
   for (const s of data.selections) if (s.backgroundPath) paths.add(s.backgroundPath); // "all matches" shares one file
   for (const p of paths) await deleteBackgroundFile(p);
   for (const b of data.brands) await deleteDownloadedBackground(b.id);
+  for (const b of data.brands) await deleteLogoFile(b.logoPath);
 }

@@ -23,10 +23,13 @@ Check the database connection: http://localhost:3000/api/health
 New tables: `Match` (shared cache), `Selection`, `FixtureDay`, `ApiUsage`.
 After copying these files run once: `npm run db:push`.
 
-Run in separate terminals (plus the render server):
+Run in separate terminals (plus the render server, see below):
 
+    npm run render
     npm run bot
     npm run worker
+
+(`start-system.bat` opens all of them, plus the site, in one Windows Terminal window.)
 
 Flow: `/matches` in Telegram -> tap matches -> send a background image -> when the match
 ends (110 min after kickoff) the finished post arrives. API-Football is asked once per match;
@@ -120,3 +123,22 @@ Setup (the Google Cloud menus change from time to time, so names may differ slig
 4. Copy the client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then restart `npm run dev`.
 5. In Testing mode Google shows a warning screen and no app logo; this is normal. Never commit the secret.
 
+
+## Render server (in this project)
+
+The post images are drawn by `render/render-server.js` (Playwright + Chromium + sharp). It lives in this
+folder, so nothing outside the project is needed. One time, after `npm install`:
+
+    npx playwright install chromium
+    xcopy C:\football-bot\logos\leagues render\assets\leagues\ /E /I     (optional white league logos)
+
+Then `npm run render` (port `RENDER_PORT`, default 4500, reachable from this computer only).
+
+- `render/templates/<name>.html`: built-in templates (classic, panel, frame, stripe). Each one uses the same
+  `{{PLACEHOLDERS}}` (see `classic.html`). `{{PAGE_NAME}}` becomes the page name or the page logo.
+- `render/cache`, `render/rendered`, `render/output`: generated files, created automatically, not in git.
+- A customer chooses the template and name-or-logo on the dashboard (`Brand.templateRef`, `Brand.brandMode`,
+  `Brand.logoPath`; logos are re-encoded PNG files in `storage/logos`). After pulling this change run
+  `npm run db:push` once (stop dev, bot and worker first).
+- If another render server (e.g. `C:\football-bot`) is still running on port 4500, close it or set another
+  `RENDER_PORT` and `RENDER_SERVER_URL`.

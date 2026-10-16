@@ -1,13 +1,15 @@
-import Image from "next/image";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { sendDocument, sendMessage } from "@/lib/telegram";
 import { renderSamplePost } from "@/lib/render";
+import { BUILTIN_TEMPLATES, brandInnerHtml, isBuiltinTemplate, templatePreviewHtml } from "@/lib/templates";
+import { MAX_LOGO_UPLOAD, deleteLogoFile, logoDataUri, saveLogo } from "@/lib/logos";
 import { LEAGUES } from "@/lib/leagues";
 import { encryptSecret, userBotToken } from "@/lib/crypto";
 import { deleteAccountFiles } from "@/lib/backgrounds";
 import { clearSessionCookie, requireUser } from "@/lib/auth";
 import AutoRefresh from "./auto-refresh";
+import TemplatePicker from "./template-picker";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,14 @@ const PAGE_MESSAGES: Record<string, { ok: boolean; text: string }> = {
   saved: { ok: true, text: "Page name saved." },
   name: { ok: false, text: "Please enter a page name (up to 60 characters)." },
   notfound: { ok: false, text: "That page was not found." },
+};
+
+const LOOK_MESSAGES: Record<string, { ok: boolean; text: string }> = {
+  saved: { ok: true, text: "Saved. Every new post uses this look." },
+  badlogo: { ok: false, text: "That file is not a usable picture. Use a PNG, JPG or WebP image." },
+  biglogo: { ok: false, text: "The logo is larger than 5 MB." },
+  nologo: { ok: false, text: "Upload a logo first. Until then your page name is shown." },
+  notfound: { ok: false, text: "Your page was not found." },
 };
 
 const ACCOUNT_MESSAGES: Record<string, string> = {
@@ -79,6 +89,41 @@ async function sendSample() {
     }
   }
   redirect(back(`&sample=${result}`));
+}
+
+// Saves the look of the posts: template, page name or logo in the top corner, and the uploaded logo.
+async function saveLook(formData: FormData) {
+  "use server";
+  const user = await requireUser();
+  const brand = await prisma.brand.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
+  if (!brand) redirect(back("&look=notfound"));
+
+  const templateRaw = String(formData.get("template") ?? "");
+  const templateRef = isBuiltinTemplate(templateRaw) ? templateRaw : brand.templateRef;
+  let brandMode = String(formData.get("brandMode") ?? "") === "logo" ? "logo" : "text";
+  let logoPath = brand.logoPath;
+
+  if (String(formData.get("removeLogo") ?? "") === "1") {
+    await deleteLogoFile(logoPath);
+    logoPath = null;
+  }
+
+  const upload = formData.get("logo");
+  if (upload instanceof File && upload.size > 0) {
+    if (upload.size > MAX_LOGO_UPLOAD) redirect(back("&look=biglogo"));
+    const saved = await saveLogo(brand.id, Buffer.from(await upload.arrayBuffer()));
+    if (!saved) redirect(back("&look=badlogo"));
+    logoPath = saved;
+  }
+
+  let result = "saved";
+  if (brandMode === "logo" && !logoPath) {
+    brandMode = "text";
+    result = "nologo";
+  }
+
+  await prisma.brand.update({ where: { id: brand.id }, data: { templateRef, brandMode, logoPath } });
+  redirect(back(`&look=${result}`));
 }
 
 // Saves the customer's OWN Telegram bot (created with @BotFather). The token is stored encrypted.
@@ -186,7 +231,7 @@ async function deleteAccount(formData: FormData) {
   const user = await prisma.user.findUnique({
     where: { id: account.id },
     include: {
-      brands: { select: { id: true, backgroundPath: true } },
+      brands: { select: { id: true, backgroundPath: true, logoPath: true } },
       selections: { select: { status: true, backgroundPath: true } },
     },
   });
@@ -209,10 +254,11 @@ export default async function Dashboard({
     saved?: string;
     bot?: string;
     page?: string;
+    look?: string;
     acct?: string;
   }>;
 }) {
-  const { test, sample, saved, bot, page, acct } = await searchParams;
+  const { test, sample, saved, bot, page, look, acct } = await searchParams;
 
   const account = await requireUser();
   const user = await prisma.user.findUnique({
@@ -255,7 +301,7 @@ export default async function Dashboard({
           </button>
         </form>
       </div>
-      <small style={{ marginTop: 10 }}>Takes a few seconds. The render server must be running (port 4500).</small>
+      <small style={{ marginTop: 10 }}>Takes a few seconds. The render server must be running (npm run render).</small>
       {test === "ok" && <p>Test message sent. Check Telegram.</p>}
       {test === "fail" && <p className="error">Sending failed. See the terminal where `npm run dev` runs.</p>}
       {sample === "ok" && <p>Sample post sent. Check Telegram.</p>}
@@ -301,6 +347,13 @@ export default async function Dashboard({
 
   const allDone = firstSteps.every((st) => st.done);
   const brand = user.brands[0];
+
+  // Live previews of every template with this customer's page name or logo (invented sample match).
+  const currentLogo = brand?.logoPath ? await logoDataUri(brand.logoPath) : null;
+  const brandHtml = brandInnerHtml(brand?.name ?? "Final Whistle", brand?.brandMode === "logo" ? currentLogo : null);
+  const tiles = await Promise.all(
+    BUILTIN_TEMPLATES.map(async (t) => ({ key: t.key, name: t.name, note: t.note, html: await templatePreviewHtml(t.key, brandHtml) })),
+  );
 
   return (
     <div className="container dash-page">
@@ -376,17 +429,41 @@ export default async function Dashboard({
 
         <section className="card wide" aria-labelledby="t-tpl">
           <h2 className="card-title" id="t-tpl">
-            Template
+            Template and logo
           </h2>
-          <p className="muted">The look of every post.</p>
-          <div className="tpl-grid">
-            <div className="tpl on">
-              <Image src="/examples/post-bayern-dortmund.jpg" alt="Classic template preview" width={720} height={900} />
-              <span className="tpl-name">Classic</span>
-              <span className="pill ok">In use</span>
-            </div>
-            <div className="tpl soon">More templates are on the way.</div>
-          </div>
+          <p className="muted">The look of every post. Previews use an invented match and update after you save.</p>
+          {look && LOOK_MESSAGES[look] && <p className={LOOK_MESSAGES[look].ok ? "notice" : "error"}>{LOOK_MESSAGES[look].text}</p>}
+          {brand && (
+            <form className="plain" action={saveLook} style={{ marginTop: 8 }}>
+              <TemplatePicker tiles={tiles} current={brand.templateRef} />
+              <fieldset className="look-brand">
+                <legend>Top corner of the post</legend>
+                <label className="check" htmlFor="mode-text">
+                  <input id="mode-text" type="radio" name="brandMode" value="text" defaultChecked={brand.brandMode !== "logo"} />
+                  My page name ({brand.name})
+                </label>
+                <label className="check" htmlFor="mode-logo">
+                  <input id="mode-logo" type="radio" name="brandMode" value="logo" defaultChecked={brand.brandMode === "logo"} />
+                  My logo
+                </label>
+                <label htmlFor="logo" style={{ marginTop: 10 }}>
+                  {currentLogo ? "Replace my logo" : "Upload my logo"} <small>(PNG, JPG or WebP, up to 5 MB. A transparent PNG looks best.)</small>
+                  <input id="logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp" />
+                </label>
+                {currentLogo && (
+                  <div className="logo-now">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={currentLogo} alt="Your current logo" />
+                    <label className="check" htmlFor="removeLogo">
+                      <input id="removeLogo" type="checkbox" name="removeLogo" value="1" />
+                      Remove my logo
+                    </label>
+                  </div>
+                )}
+              </fieldset>
+              <button type="submit">Save look</button>
+            </form>
+          )}
         </section>
 
         <details className="card wide leagues">
