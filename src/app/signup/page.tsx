@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { LEAGUES } from "@/lib/leagues";
 import { createSession, getCurrentUser } from "@/lib/auth";
 import { MAX_PASSWORD, MIN_PASSWORD, hashPassword } from "@/lib/password";
+import GoogleButton from "@/app/google-button";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,7 @@ export default async function SignUp({
       <h1>Create your account</h1>
       <p className="lead">Tell us which page the posts are for and which leagues you follow.</p>
       {error && ERRORS[error] && <p className="error">{ERRORS[error]}</p>}
+      <GoogleButton />
       <form action={createAccount}>
         <label htmlFor="email">
           Email

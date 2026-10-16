@@ -291,3 +291,8 @@ details.leagues[open] { padding-bottom: 24px; }
 .lrow > summary { list-style: none; display: flex; align-items: center; min-height: 46px; cursor: pointer; }
 .lrow > summary::-webkit-details-marker { display: none; }
 .lrow .clubs { padding-bottom: 10px; }
+
+/* ---------- Continue with Google ---------- */
+.btn.google { width: 100%; gap: 10px; margin-top: 20px; align-self: stretch; }
+.or { display: flex; align-items: center; gap: 12px; margin-top: 20px; font-size: 13px; color: var(--muted); }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }

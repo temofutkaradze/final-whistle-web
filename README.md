@@ -106,3 +106,17 @@ Everything about a match happens in Telegram (`/matches`, tap the matches, send 
 for the settings that stay the same: connecting the bot, the page name, the template and the leagues/clubs shown by
 `/matches`. The leagues list is collapsed by default.
 
+## Continue with Google (free)
+
+Optional. The button appears on the login and sign-up pages only when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+are set in `.env`. Only the basic scopes (`openid email profile`) are requested. An existing account with the same
+(Google-verified) email is simply logged in; otherwise an account with a page called "My page" is created.
+
+Setup (the Google Cloud menus change from time to time, so names may differ slightly):
+1. Open console.cloud.google.com and create a project (any name).
+2. Google Auth Platform (formerly "OAuth consent screen"): app name, support email, audience "External", contact email.
+3. Clients, create a client of type "Web application". Under "Authorized redirect URIs" add exactly
+   `http://localhost:3000/auth/google/callback` (use the port you really open; add your real domain later).
+4. Copy the client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then restart `npm run dev`.
+5. In Testing mode Google shows a warning screen and no app logo; this is normal. Never commit the secret.
+
