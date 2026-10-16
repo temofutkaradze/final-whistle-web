@@ -14,7 +14,7 @@ Check the database connection: http://localhost:3000/api/health
 ## Structure
 
 - `prisma/schema.prisma`: User, Brand, Subscription tables
-- `src/app/signup`: sign-up form (server action writes to the database)
+- `src/app/signup`: sign-up form (email + password only; the page name, bot and leagues are set on the dashboard)
 - `src/app/dashboard`: shows an account by email
 - `src/lib/leagues.ts`: league ids shared with the n8n workflow
 

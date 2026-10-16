@@ -43,29 +43,29 @@ export default async function Login({
 
   return (
     <div className="container auth">
-      <div className="card">
-      <h1>Log in</h1>
-      {deleted === "1" && <p className="notice">Your account and its data were deleted.</p>}
-      {error && ERRORS[error] && <p className="error">{ERRORS[error]}</p>}
-      <GoogleButton />
-      <form action={login}>
-        <label htmlFor="email">
-          Email
-          <input id="email" name="email" type="email" required autoComplete="email" />
-        </label>
-        <label htmlFor="password">
-          Password
-          <input id="password" name="password" type="password" required autoComplete="current-password" />
-        </label>
-        <button type="submit">Log in</button>
-      </form>
-      <p style={{ marginTop: 20 }}>
-        No account yet? <a href="/signup">Create one</a>.
-      </p>
-      <p className="notice">
-        Demo build. There is no password reset yet. Accounts created before passwords existed cannot log in with a
-        password: use Continue with Google (same email) when it is shown, or create a new account with another email.
-      </p>
+      <div className="auth-box">
+        <h1>Welcome back</h1>
+        <p className="lead">Log in to manage your bot and your posts.</p>
+        <div className="card auth-card">
+          {deleted === "1" && <p className="alert ok">Your account and its data were deleted.</p>}
+          {error && ERRORS[error] && <p className="alert">{ERRORS[error]}</p>}
+          <GoogleButton />
+          <form action={login}>
+            <label htmlFor="email">
+              Email
+              <input id="email" name="email" type="email" required autoComplete="email" autoFocus />
+            </label>
+            <label htmlFor="password">
+              Password
+              <input id="password" name="password" type="password" required autoComplete="current-password" />
+            </label>
+            <button type="submit">Log in</button>
+          </form>
+        </div>
+        <p className="auth-switch">
+          New here? <a href="/signup">Create an account</a>
+        </p>
+        <p className="auth-note">Demo build: there is no password reset yet.</p>
       </div>
     </div>
   );

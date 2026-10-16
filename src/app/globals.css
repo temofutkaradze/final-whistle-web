@@ -246,11 +246,19 @@ details.danger[open] > summary::after { content: "\2013"; }
 .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding-bottom: 48px; font-size: 14px; color: var(--muted); }
 
 /* ---------- sign up / log in ---------- */
-.auth { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 64px; padding-top: 24px; padding-bottom: 80px; }
-.auth .card { flex: 1 1 440px; max-width: 560px; padding: 40px; margin: 0; }
-.auth-aside { flex: 1 1 320px; max-width: 420px; margin: 0 auto; }
-.auth-aside img { width: 100%; height: auto; display: block; border-radius: 14px; box-shadow: 0 24px 48px -16px var(--shadow); }
-.auth-aside p { font-family: var(--serif); font-size: 28px; line-height: 1.15; margin-top: 28px; }
+.auth { display: flex; justify-content: center; padding-top: 16px; padding-bottom: 96px; }
+.auth-box { width: 100%; max-width: 420px; }
+.auth-box h1 { text-align: center; font-size: clamp(34px, 6vw, 44px); margin-bottom: 8px; }
+.auth-box .lead { text-align: center; margin-bottom: 28px; font-size: 16px; }
+.auth .card.auth-card { padding: 32px; margin: 0; }
+.auth-card > form { margin-top: 0; gap: 16px; }
+.auth-card > .btn.google + .or + form { margin-top: 20px; }
+.auth-card form button { align-self: stretch; width: 100%; }
+.auth-card input { min-height: 48px; }
+.auth-switch { text-align: center; margin-top: 24px; font-size: 15px; }
+.auth-note { text-align: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.alert { border: 1px solid var(--danger-line); border-radius: 12px; padding: 10px 14px; margin-bottom: 20px; font-size: 14px; line-height: 1.5; color: var(--danger); }
+.alert.ok { border-color: var(--line); color: var(--label); }
 .center { text-align: center; }
 
 p a:not(.btn) { text-decoration: underline; text-underline-offset: 3px; }
@@ -293,6 +301,6 @@ details.leagues[open] { padding-bottom: 24px; }
 .lrow .clubs { padding-bottom: 10px; }
 
 /* ---------- Continue with Google ---------- */
-.btn.google { width: 100%; gap: 10px; margin-top: 20px; align-self: stretch; }
-.or { display: flex; align-items: center; gap: 12px; margin-top: 20px; font-size: 13px; color: var(--muted); }
+.btn.google { width: 100%; gap: 10px; align-self: stretch; min-height: 48px; }
+.or { display: flex; align-items: center; gap: 12px; margin-top: 20px; margin-bottom: 0; font-size: 13px; color: var(--muted); }
 .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
