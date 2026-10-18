@@ -1,21 +1,56 @@
 // The template choices, each shown as a small live preview of the real template filled with an invented match.
-// Server component: the inputs belong to the form on the dashboard page.
+// Server component: the inputs belong to the form on the dashboard page. The "+" tile opens the Add template panel
+// (a plain link: the panel shows itself with CSS :target). Every template has an Edit link (?edit=<key>); a customer's own
+// template also has a Delete button that belongs to the same form (formAction), so no form is nested inside another.
 
-type Tile = { key: string; name: string; note: string; html: string };
+type Tile = { key: string; name: string; note: string; html: string; custom: boolean };
 
-export default function TemplatePicker({ tiles, current }: { tiles: Tile[]; current: string }) {
+export default function TemplatePicker({
+  tiles,
+  current,
+  canAdd,
+  deleteAction,
+}: {
+  tiles: Tile[];
+  current: string;
+  canAdd: boolean;
+  deleteAction: (id: string, formData: FormData) => void | Promise<void>;
+}) {
   return (
     <div className="tpl-grid" role="radiogroup" aria-label="Template">
       {tiles.map((t) => (
-        <label key={t.key} className="tpl-pick">
-          <input type="radio" name="template" value={t.key} defaultChecked={t.key === current} />
-          <span className="tpl-frame">
-            <iframe srcDoc={t.html} sandbox="" title={`${t.name} preview`} tabIndex={-1} scrolling="no" loading="lazy" />
-          </span>
-          <span className="tpl-name">{t.name}</span>
-          <small>{t.note}</small>
-        </label>
+        <div key={t.key} className="tpl-cell">
+          <label className="tpl-pick">
+            <input type="radio" name="template" value={t.key} defaultChecked={t.key === current} />
+            <span className="tpl-frame">
+              <iframe srcDoc={t.html} sandbox="" title={`${t.name} preview`} tabIndex={-1} scrolling="no" loading="lazy" />
+            </span>
+            <span className="tpl-name">{t.name}</span>
+            <small>{t.note}</small>
+          </label>
+          <div className="tpl-actions">
+            <a className="btn ghost tpl-sm" href={`/dashboard?edit=${encodeURIComponent(t.key)}#add-template`}>
+              Edit
+            </a>
+            {t.custom && (
+              <button type="submit" className="ghost tpl-sm" formAction={deleteAction.bind(null, t.key.replace("custom:", ""))} formNoValidate>
+                Delete
+              </button>
+            )}
+          </div>
+        </div>
       ))}
+      {canAdd ? (
+        <a className="tpl-add" href="/dashboard#add-template" aria-label="Add a template">
+          <span className="tpl-plus" aria-hidden="true">
+            +
+          </span>
+          <span className="tpl-name">Add template</span>
+          <small>Paste HTML or build one</small>
+        </a>
+      ) : (
+        <p className="muted tpl-limit">Limit of own templates reached.</p>
+      )}
     </div>
   );
 }

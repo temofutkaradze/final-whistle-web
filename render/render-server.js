@@ -26,7 +26,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
+const { checkTemplateHtml, withCsp } = require('./template-check.js');
 const { chromium } = require('playwright');
 const sharp = require('sharp');
 
@@ -50,6 +51,44 @@ function templatePathFor(key) {
   return fs.existsSync(p) ? p : path.join(TEMPLATES_DIR, `${DEFAULT_TEMPLATE}.html`);
 }
 const WARMUP_TEMPLATE_PATH = templatePathFor(DEFAULT_TEMPLATE);
+
+// ---------------------------------------------------------------------------
+// Customer-made templates ("template_html" in the request) are untrusted. Layers of protection:
+//   1. checkTemplateHtml (template-check.js) refuses scripts, event attributes, frames, forms and any URL that is
+//      not a {{placeholder}}, a data: picture or Google Fonts. It runs again here, never trusting the request.
+//   2. withCsp adds a Content-Security-Policy to the page: no script, no connections, no frames.
+//   3. guardPage below lets the browser fetch only what a post needs: data:, Google Fonts, the project's own logo /
+//      background folders and the remote logo URLs of this very request. Everything else is aborted.
+// Built-in templates (render/templates) are our own files and are drawn as before.
+// ---------------------------------------------------------------------------
+const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+const ALLOWED_FILE_DIRS = [
+  RENDERED_DIR,
+  path.join(ROOT, 'cache', 'logos'),
+  path.join(ROOT, 'assets', 'leagues'),
+  path.join(ROOT, '..', 'storage', 'backgrounds'),
+].map((p) => norm(path.resolve(p)));
+
+function requestAllowed(urlStr, remoteOk) {
+  let u;
+  try { u = new URL(urlStr); } catch (e) { return false; }
+  if (u.protocol === 'data:' || u.protocol === 'about:') return true;
+  if (u.protocol === 'file:') {
+    let p;
+    try { p = norm(path.resolve(fileURLToPath(u))); } catch (e) { return false; }
+    return ALLOWED_FILE_DIRS.some((dir) => p === dir || p.startsWith(dir + path.sep));
+  }
+  if (u.protocol === 'https:' && (u.hostname === 'fonts.googleapis.com' || u.hostname === 'fonts.gstatic.com')) return true;
+  return remoteOk.has(urlStr);
+}
+
+async function guardPage(page, remoteOk) {
+  await page.route('**/*', (route) => {
+    if (requestAllowed(route.request().url(), remoteOk)) return route.continue();
+    console.warn('[custom template] blocked request:', route.request().url().slice(0, 120));
+    return route.abort();
+  });
+}
 
 // Final Instagram output
 const FINAL_WIDTH = 1080;
@@ -317,8 +356,19 @@ const server = http.createServer((req, res) => {
       // fixture_id ends up in file names: keep only safe characters
       const fixtureId = String(d.fixture_id ?? '').replace(/[^A-Za-z0-9_-]/g, '_') || String(Date.now());
 
-      const templatePath = templatePathFor(d.template);
-      let html = fs.readFileSync(templatePath, 'utf8');
+      let html;
+      const isCustom = typeof d.template_html === 'string' && d.template_html !== '';
+      if (isCustom) {
+        const check = checkTemplateHtml(d.template_html);
+        if (!check.ok) throw new Error('Custom template rejected: ' + check.errors.join(' '));
+        html = withCsp(d.template_html);
+      } else {
+        html = fs.readFileSync(templatePathFor(d.template), 'utf8');
+      }
+      // Remote picture URLs of this request (logos the server could not cache) may still be fetched by a custom template.
+      const remoteOk = new Set(
+        [d.home_logo, d.away_logo, d.league_logo].filter((u) => typeof u === 'string' && /^https?:\/\//.test(u))
+      );
 
       // Decide how the league logo is shown (see LEAGUE_LOGO_DIR comment above)
       const leagueIdMatch = String(d.league_logo || '').match(/leagues\/(\d+)/);
@@ -421,6 +471,7 @@ const server = http.createServer((req, res) => {
         try {
           const context = await getContext();
           page = await context.newPage();
+          if (isCustom) await guardPage(page, remoteOk);
           await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 60000 });
           await waitUntilReady(page);
           tPageReady = Date.now();

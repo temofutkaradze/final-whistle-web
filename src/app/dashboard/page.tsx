@@ -1,8 +1,12 @@
 import { redirect } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { sendDocument, sendMessage } from "@/lib/telegram";
 import { renderSamplePost } from "@/lib/render";
-import { BUILTIN_TEMPLATES, brandInnerHtml, isBuiltinTemplate, templatePreviewHtml } from "@/lib/templates";
+import { BUILTIN_TEMPLATES, MAX_CUSTOM_TEMPLATES, builtinTemplateHtml, customTemplateId, isBuiltinTemplate, previewHtml } from "@/lib/templates";
+import { brandInnerHtml } from "@/lib/sample-match";
+import { normalizeConfig } from "@/lib/template-builder";
+import { prepareTemplateInput } from "@/lib/template-input";
 import { MAX_LOGO_UPLOAD, deleteLogoFile, logoDataUri, saveLogo } from "@/lib/logos";
 import { LEAGUES } from "@/lib/leagues";
 import { encryptSecret, userBotToken } from "@/lib/crypto";
@@ -10,6 +14,7 @@ import { deleteAccountFiles } from "@/lib/backgrounds";
 import { clearSessionCookie, requireUser } from "@/lib/auth";
 import AutoRefresh from "./auto-refresh";
 import TemplatePicker from "./template-picker";
+import AddTemplate, { type Editing, type SaveState } from "./add-template";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +40,9 @@ const LOOK_MESSAGES: Record<string, { ok: boolean; text: string }> = {
   biglogo: { ok: false, text: "The logo is larger than 5 MB." },
   nologo: { ok: false, text: "Upload a logo first. Until then your page name is shown." },
   notfound: { ok: false, text: "Your page was not found." },
+  tpladded: { ok: true, text: "Template saved and selected for your page." },
+  tplupdated: { ok: true, text: "Template updated." },
+  tpldeleted: { ok: true, text: "Template deleted." },
 };
 
 const ACCOUNT_MESSAGES: Record<string, string> = {
@@ -80,7 +88,14 @@ async function sendSample() {
   const brand = user.brands[0];
   if (user.telegramChatId && user.botToken && brand) {
     try {
-      const jpgPath = await renderSamplePost(brand);
+      // A customer-made template is read from the database and sent along with the request.
+      let templateHtml: string | undefined;
+      const customId = customTemplateId(brand.templateRef);
+      if (customId) {
+        const t = await prisma.template.findFirst({ where: { id: customId, userId: user.id }, select: { html: true } });
+        templateHtml = t?.html;
+      }
+      const jpgPath = await renderSamplePost(brand, templateHtml);
       await sendDocument(user.telegramChatId, jpgPath, `Sample post for ${brand.name}`, userBotToken(user) as string);
       result = "ok";
     } catch (e) {
@@ -99,7 +114,14 @@ async function saveLook(formData: FormData) {
   if (!brand) redirect(back("&look=notfound"));
 
   const templateRaw = String(formData.get("template") ?? "");
-  const templateRef = isBuiltinTemplate(templateRaw) ? templateRaw : brand.templateRef;
+  let templateRef = brand.templateRef;
+  if (isBuiltinTemplate(templateRaw)) {
+    templateRef = templateRaw;
+  } else {
+    const customId = customTemplateId(templateRaw);
+    const own = customId ? await prisma.template.findFirst({ where: { id: customId, userId: user.id }, select: { id: true } }) : null;
+    if (own) templateRef = templateRaw;
+  }
   let brandMode = String(formData.get("brandMode") ?? "") === "logo" ? "logo" : "text";
   let logoPath = brand.logoPath;
 
@@ -124,6 +146,48 @@ async function saveLook(formData: FormData) {
 
   await prisma.brand.update({ where: { id: brand.id }, data: { templateRef, brandMode, logoPath } });
   redirect(back(`&look=${result}`));
+}
+
+// ---- customer-made templates ----
+
+// Saves a template made with the options form or from pasted / edited HTML. Problems come back as a message shown next to
+// the Save button (the form keeps everything the customer typed); success redirects to the template list.
+// "overwrite" changes the customer's own template, anything else creates a new one (built-in templates are never changed).
+async function saveTemplate(_prev: SaveState, formData: FormData): Promise<SaveState> {
+  "use server";
+  const user = await requireUser();
+  const prepared = prepareTemplateInput(formData);
+  if (!prepared.ok) return { error: prepared.error };
+  const { name, html, config } = prepared;
+  const configJson = config ? (config as unknown as Prisma.InputJsonObject) : Prisma.DbNull;
+
+  if (String(formData.get("saveMode") ?? "") === "overwrite") {
+    const own = await prisma.template.findFirst({ where: { id: String(formData.get("editId") ?? ""), userId: user.id }, select: { id: true } });
+    if (own) {
+      await prisma.template.update({ where: { id: own.id }, data: { name, html, config: configJson } });
+      redirect(back("&look=tplupdated") + "#t-tpl");
+    }
+  }
+
+  if ((await prisma.template.count({ where: { userId: user.id } })) >= MAX_CUSTOM_TEMPLATES) {
+    return { error: `You can have up to ${MAX_CUSTOM_TEMPLATES} own templates. Delete one first, or overwrite an existing one.` };
+  }
+  const created = await prisma.template.create({ data: { userId: user.id, name, html, config: configJson }, select: { id: true } });
+  const brand = await prisma.brand.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, select: { id: true } });
+  if (brand) await prisma.brand.update({ where: { id: brand.id }, data: { templateRef: `custom:${created.id}` } });
+  redirect(back("&look=tpladded") + "#t-tpl");
+}
+
+async function deleteTemplate(id: string, _formData: FormData) {
+  "use server";
+  const user = await requireUser();
+  const own = await prisma.template.findFirst({ where: { id, userId: user.id }, select: { id: true } });
+  if (own) {
+    await prisma.template.delete({ where: { id: own.id } });
+    // pages that used it go back to Classic
+    await prisma.brand.updateMany({ where: { userId: user.id, templateRef: `custom:${own.id}` }, data: { templateRef: "classic" } });
+  }
+  redirect(back("&look=tpldeleted"));
 }
 
 // Saves the customer's OWN Telegram bot (created with @BotFather). The token is stored encrypted.
@@ -255,10 +319,11 @@ export default async function Dashboard({
     bot?: string;
     page?: string;
     look?: string;
+    edit?: string;
     acct?: string;
   }>;
 }) {
-  const { test, sample, saved, bot, page, look, acct } = await searchParams;
+  const { test, sample, saved, bot, page, look, edit, acct } = await searchParams;
 
   const account = await requireUser();
   const user = await prisma.user.findUnique({
@@ -351,9 +416,42 @@ export default async function Dashboard({
   // Live previews of every template with this customer's page name or logo (invented sample match).
   const currentLogo = brand?.logoPath ? await logoDataUri(brand.logoPath) : null;
   const brandHtml = brandInnerHtml(brand?.name ?? "Final Whistle", brand?.brandMode === "logo" ? currentLogo : null);
-  const tiles = await Promise.all(
-    BUILTIN_TEMPLATES.map(async (t) => ({ key: t.key, name: t.name, note: t.note, html: await templatePreviewHtml(t.key, brandHtml) })),
-  );
+  const customTemplates = await prisma.template.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, name: true, html: true, config: true },
+  });
+  const tiles = [
+    ...(await Promise.all(
+      BUILTIN_TEMPLATES.map(async (t) => ({
+        key: t.key,
+        name: t.name,
+        note: t.note,
+        custom: false,
+        html: previewHtml(await builtinTemplateHtml(t.key), brandHtml),
+      })),
+    )),
+    ...customTemplates.map((t: { id: string; name: string; html: string }) => ({
+      key: `custom:${t.id}`,
+      name: t.name,
+      note: "Your template",
+      custom: true,
+      html: previewHtml(t.html, brandHtml),
+    })),
+  ];
+
+
+  // Edit mode (?edit=<template key>): a built-in template opens as HTML (and is saved as a new template),
+  // the customer's own template opens as it was made (options form, or HTML code).
+  let editing: Editing | null = null;
+  if (edit && isBuiltinTemplate(edit)) {
+    const meta = BUILTIN_TEMPLATES.find((t) => t.key === edit);
+    editing = { key: edit, name: meta?.name ?? edit, html: await builtinTemplateHtml(edit), config: null, ownId: null };
+  } else if (edit) {
+    const cid = customTemplateId(edit);
+    const own = cid ? customTemplates.find((t: { id: string }) => t.id === cid) : null;
+    if (own) editing = { key: edit, name: own.name, html: own.html, config: own.config ? normalizeConfig(own.config) : null, ownId: own.id };
+  }
 
   return (
     <div className="container dash-page">
@@ -435,7 +533,7 @@ export default async function Dashboard({
           {look && LOOK_MESSAGES[look] && <p className={LOOK_MESSAGES[look].ok ? "notice" : "error"}>{LOOK_MESSAGES[look].text}</p>}
           {brand && (
             <form className="plain" action={saveLook} style={{ marginTop: 8 }}>
-              <TemplatePicker tiles={tiles} current={brand.templateRef} />
+              <TemplatePicker tiles={tiles} current={brand.templateRef} canAdd={customTemplates.length < MAX_CUSTOM_TEMPLATES} deleteAction={deleteTemplate} />
               <fieldset className="look-brand">
                 <legend>Top corner of the post</legend>
                 <label className="check" htmlFor="mode-text">
@@ -464,6 +562,9 @@ export default async function Dashboard({
               <button type="submit">Save look</button>
             </form>
           )}
+          <div id="add-template" className="add-panel">
+            <AddTemplate key={editing?.key ?? "new"} save={saveTemplate} used={customTemplates.length} max={MAX_CUSTOM_TEMPLATES} brandHtml={brandHtml} editing={editing} />
+          </div>
         </section>
 
         <details className="card wide leagues">

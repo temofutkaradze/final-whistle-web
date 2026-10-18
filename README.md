@@ -142,3 +142,24 @@ Then `npm run render` (port `RENDER_PORT`, default 4500, reachable from this com
   `npm run db:push` once (stop dev, bot and worker first).
 - If another render server (e.g. `C:\football-bot`) is still running on port 4500, close it or set another
   `RENDER_PORT` and `RENDER_SERVER_URL`.
+
+## Own templates (paste HTML or build one)
+
+On the dashboard, in "Template and logo", the "+" tile opens "Add a template". A customer can have up to 12 own templates
+(`Template` table; `Brand.templateRef` is `custom:<id>` when one is selected).
+
+- **Build it here**: font, colours, dark layer, position, what to show. `src/lib/template-builder.ts` turns the options
+  into normal template HTML (every value comes from a fixed list or a `#rrggbb` check).
+- **Paste HTML**: any template that uses the `{{PLACEHOLDERS}}` of `render/templates/classic.html`.
+  `render/template-check.js` is the safety check (used by the form, by the server action and again by the render server):
+  no scripts, no `on...=` attributes, no frames or forms, and no URL except a `{{placeholder}}`, a `data:` picture or Google Fonts.
+- When drawing a customer template the render server also adds a Content-Security-Policy to the page and blocks every
+  browser request except `data:`, Google Fonts, its own logo and background folders and the logo URLs of that request.
+- The worker reads the template html from the database and sends it as `template_html`. A deleted template falls back to Classic.
+- After pulling this change: `npm run db:push` (stop dev, bot and worker first).
+
+Every template tile has an **Edit** link (`/dashboard?edit=<key>`). A built-in template opens as HTML and is always saved as a new
+template (the built-in files never change). A customer's own template opens as it was made (options form or HTML) and, when
+saving, the customer chooses "overwrite" or "save as a new template". The options form has about 30 options
+(`BuilderConfig` in `src/lib/template-builder.ts`; older saved configs get defaults for new options). Form input is checked
+server-side in `src/lib/template-input.ts`.

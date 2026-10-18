@@ -30,6 +30,7 @@ model User {
   selections    Selection[]
   favoriteTeams FavoriteTeam[]
   sessions      Session[]
+  templates     Template[]
 }
 
 // A login. The browser holds the random token; only its SHA-256 is stored here.
@@ -156,4 +157,18 @@ model FavoriteTeam {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, teamId])
+}
+
+// A template made by the customer: pasted HTML, or built with the options form (config keeps those options).
+// html is checked by render/template-check.js before it is stored and again before every render.
+model Template {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  html      String
+  config    Json?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

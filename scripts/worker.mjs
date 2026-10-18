@@ -50,11 +50,21 @@ async function pickBackground(sel, brand) {
   return { background_data_uri: DEFAULT_BACKGROUND };
 }
 
+// A customer-made template lives in the database: its html is sent along with the render request.
+// If it was deleted in the meantime, the post is drawn with Classic.
+async function customTemplateFields(brand) {
+  const ref = brand?.templateRef ?? "";
+  if (!ref.startsWith("custom:")) return {};
+  const t = await prisma.template.findFirst({ where: { id: ref.slice("custom:".length), userId: brand.userId }, select: { html: true } });
+  return t ? { template: "classic", template_html: t.html } : { template: "classic" };
+}
+
 async function sendOne(sel, match, eventsHtml) {
   const brand = sel.user.brands[0];
   const jpg = await renderPost({
     fixture_id: `${match.fixtureId}_${sel.id}`, // unique per customer, so files never collide
     ...(await brandLookFields(brand)),
+    ...(await customTemplateFields(brand)),
     ...(await pickBackground(sel, brand)),
     league_logo: match.leagueLogo,
     home_logo: match.homeLogo,
