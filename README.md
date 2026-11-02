@@ -176,6 +176,11 @@ The tests need no database, no internet and no browser. What they cover (`tests/
   bot/worker (two separate copies of the code) can read each other's encrypted tokens.
 - `template-check`, `template-builder`, `template-input`: the safety check for customer templates (30 attack samples),
   every option of the template builder, and the server side of the Add / Edit template form.
+- `worker-core`: the worker's decisions, run against an in-memory database: normal posts, API problems, an unreachable render
+  server or Telegram, never sending a post twice, giving up after 24 hours, clean-up.
+- `poller`, `selection`: the Telegram bot's listening loop (internet drops, bad token, a failing handler) and a tap on a match button
+  (double taps, a post that is being sent).
+- `wiring`: every name that `worker.mjs` and `bot.mjs` import really exists.
 - `google`: the helper functions of "Continue with Google" (PKCE vector from RFC 7636, state, only a verified email is accepted,
   code exchange with a fake Google).
 - `logos`: logo upload (only real PNG / JPEG / WebP, always re-encoded, never outside `storage/logos`).
@@ -186,3 +191,33 @@ The tests need no database, no internet and no browser. What they cover (`tests/
 
 Not covered (check by hand): Google login, Telegram (token, Start, delivery), the real database, and that real Chromium draws
 the templates well (`npm run render`, then "Send a sample post" on the dashboard).
+
+## How the worker and the bot handle problems
+
+The worker (`scripts/worker.mjs`, logic in `scripts/lib/worker-core.mjs`) and the bot (`scripts/bot.mjs`, loop in
+`scripts/lib/poller.mjs`) are written to keep going when something outside breaks:
+
+- A failing match-data call does not stop the posts that are ready, and is retried after 10, 20, 40 ... minutes (never every
+  minute), so it cannot use up the free 100 requests a day.
+- A render server or Telegram that is simply not reachable (not started, network down, "too many requests") does not use up a
+  post's 5 attempts. The post waits and is sent when things work again, for up to 24 hours.
+- A post that was delivered is never sent twice, even if the database was asleep when the worker tried to note it.
+- A match that ended with goals but no events is looked up again (after 5 and 10 minutes) before a post without scorers is made.
+- After 24 hours without a result, the post is closed and the customer is told.
+- The bot's listening loop survives an internet drop and restarts by itself; a bad token is checked again after 5 minutes.
+
+## Security and checks
+
+- **Security headers** (`next.config.mjs`): every page gets `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`
+  and `Permissions-Policy`. In production (`npm run build` + `npm start`) it also gets a `Content-Security-Policy` (only this
+  site and Google Fonts may be loaded, nobody may frame the site, forms only go to this site) and `Strict-Transport-Security`.
+  Development (`npm run dev`) has no policy, because live reload needs things it would block, so after a change that adds a new
+  outside service (a new font host, an analytics script, an embedded video...) test with `npm run build` and `npm start`
+  and look at the browser console for "Refused to ..." messages.
+- **CI** (`.github/workflows/ci.yml`): GitHub runs the types check, the tests and a production build on every push to `main` and
+  on every pull request. **Dependabot** (`.github/dependabot.yml`) opens a weekly pull request for new dependency versions.
+- `getCurrentUser()` (`src/lib/auth.ts`) is remembered for the length of one request (`cache()`): a page load asks the database
+  for the session once instead of three times.
+- Known `npm audit` findings that are not fixed on purpose: `postcss` (inside Next.js 15, used only while building the CSS of
+  this project) and the Prisma command-line tool (build time only). Both need a major upgrade (Next.js 16, Prisma 7), which is a
+  separate step. The critical Next.js problems (image optimisation and server actions) are fixed by Next.js 15.5.28.

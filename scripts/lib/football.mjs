@@ -183,12 +183,21 @@ export async function refreshStatuses(date, trackedMatches) {
 // Events: 1 request per finished match, stored once (same as the n8n "Get Match Events").
 // ---------------------------------------------------------------------------
 
-export async function fetchEventsOnce(fixtureId) {
-  const events = await apiGet("fixtures/events", { fixture: fixtureId });
+// Download the events (1 API request) without saving them. The worker decides whether they are good enough to keep.
+export function fetchEvents(fixtureId) {
+  return apiGet("fixtures/events", { fixture: fixtureId });
+}
+
+export async function saveEvents(fixtureId, events) {
   await prisma.match.update({
     where: { fixtureId },
     data: { eventsJson: events, finishedAt: new Date() },
   });
+}
+
+export async function fetchEventsOnce(fixtureId) {
+  const events = await fetchEvents(fixtureId);
+  await saveEvents(fixtureId, events);
   return events;
 }
 

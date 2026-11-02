@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
@@ -29,7 +30,9 @@ export async function createSession(userId: string): Promise<void> {
 }
 
 // The logged-in user, or null. Only reads the cookie (safe to call from pages and layouts).
-export async function getCurrentUser() {
+// cache(): the layout and the page of one request both ask for the user, but the database is asked only once
+// (the answer is remembered for that single request, never longer).
+export const getCurrentUser = cache(async () => {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const session = await prisma.session.findUnique({
@@ -38,7 +41,7 @@ export async function getCurrentUser() {
   });
   if (!session || session.expiresAt < new Date()) return null;
   return session.user;
-}
+});
 
 export async function requireUser() {
   const user = await getCurrentUser();

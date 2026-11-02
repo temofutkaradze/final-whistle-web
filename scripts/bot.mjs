@@ -15,6 +15,8 @@ import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR } from "./lib/render.mjs";
 import { ensureDay, formatKickoff, localDate } from "./lib/football.mjs";
 import { MAX_AGE_HOURS } from "./lib/config.mjs";
+import { runPoller, shouldRestart } from "./lib/poller.mjs";
+import { toggleSelection } from "./lib/selection.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_BUTTONS = 50;
@@ -161,20 +163,12 @@ async function handleCallback(ctx, cb) {
 
   if (kind === "select") {
     const fixtureId = Number(arg);
-    const match = await prisma.match.findUnique({ where: { fixtureId } });
-    if (!match) return answer("This match is no longer available.");
-
-    const existing = await prisma.selection.findUnique({ where: { userId_fixtureId: { userId: user.id, fixtureId } } });
-    let nowSelected;
-    if (existing && existing.status === "COMPLETED") return answer("Already sent to you.");
-    if (existing) {
-      await prisma.selection.delete({ where: { id: existing.id } });
-      nowSelected = false;
-    } else {
-      if (match.kickoff.getTime() < Date.now() - MAX_AGE_HOURS * 3600e3) return answer("This match is too old.");
-      await prisma.selection.create({ data: { userId: user.id, fixtureId } });
-      nowSelected = true;
-    }
+    const { result } = await toggleSelection({ prisma, userId: user.id, fixtureId, maxAgeHours: MAX_AGE_HOURS });
+    if (result === "no-match") return answer("This match is no longer available.");
+    if (result === "already-sent") return answer("Already sent to you.");
+    if (result === "sending") return answer("This post is being sent right now.");
+    if (result === "too-old") return answer("This match is too old.");
+    const nowSelected = result === "selected";
     await answer(nowSelected ? "Selected ✅" : "Removed");
 
     // Update the tick marks in the message that was tapped.
@@ -239,45 +233,14 @@ async function handle(ctx, update) {
   return sendMatchList(ctx, chatId, user, text.toLowerCase());
 }
 
-// One long-polling loop per bot.
-async function pollLoop(entry) {
-  const { tg, label } = entry;
-  const me = await tg.api("getMe");
-  if (!me.ok) {
-    console.error(`[${label}] Telegram rejected this bot token: ${me.description}`);
-    entry.failed = true;
-    return;
-  }
-  await tg.api("deleteWebhook"); // a webhook would block polling
-  await tg.api("setMyCommands", {
-    commands: [
-      { command: "matches", description: "Today's matches" },
-      { command: "help", description: "How it works" },
-    ],
-  });
-  console.log(`[${label}] bot @${me.result.username} is running`);
-
-  let offset = 0;
-  while (!entry.stop) {
-    const res = await tg.api("getUpdates", { timeout: 25, offset, allowed_updates: ["message", "callback_query"] });
-    if (entry.stop) break;
-    if (!res.ok) {
-      console.error(`[${label}] getUpdates error: ${res.description}`);
-      if (res.error_code === 409) console.error(`[${label}] This bot has a webhook or another poller. Use a separate bot.`);
-      await sleep(5000);
-      continue;
-    }
-    for (const update of res.result) {
-      offset = update.update_id + 1;
-      try {
-        await handle(entry.ctx, update);
-      } catch (e) {
-        console.error(`[${label}] failed to handle update:`, e);
-      }
-    }
-  }
-  console.log(`[${label}] bot stopped`);
+// Something went wrong while handling a message or a tap: tell the person briefly instead of staying silent.
+async function tellProblem(ctx, update) {
+  if (update.callback_query) await ctx.tg.api("answerCallbackQuery", { callback_query_id: update.callback_query.id, text: "Something went wrong. Please try again." });
+  else if (update.message?.chat) await ctx.tg.sendMessage(String(update.message.chat.id), "Something went wrong. Please try again in a moment.");
 }
+
+// One long-polling loop per bot (the loop itself is in lib/poller.mjs).
+const pollLoop = (entry) => runPoller(entry, { handle, onUpdateError: tellProblem, sleep });
 
 const running = new Map(); // token -> { stop, ctx, tg, label }
 
@@ -295,11 +258,16 @@ async function syncBots() {
 
   for (const [token, info] of wanted) {
     const existing = running.get(token);
-    if (existing && !existing.failed) continue;
+    if (!shouldRestart(existing, Date.now())) continue; // running, or failed a moment ago and waiting before the next try
+    if (existing) existing.stop = true;
     const tg = makeTelegram(token);
-    const entry = { stop: false, failed: false, tg, label: info.label, ctx: { tg, ownerId: info.ownerId } };
+    const entry = { stop: false, failed: false, tg, label: info.label, ctx: { tg, ownerId: info.ownerId }, lastFailure: existing?.lastFailure ?? null };
     running.set(token, entry);
-    pollLoop(entry).catch((e) => console.error(`[${info.label}] polling crashed:`, e));
+    pollLoop(entry).catch((e) => {
+      console.error(`[${info.label}] polling crashed:`, e);
+      entry.failed = true; // the next round restarts it (a crash used to end this bot until the program was restarted)
+      entry.retryAt = Date.now() + 30_000;
+    });
   }
   for (const [token, entry] of running) {
     if (!wanted.has(token)) {

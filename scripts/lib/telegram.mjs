@@ -5,11 +5,14 @@ import { decryptSecret } from "./crypto.mjs";
 
 // Everything the scripts need from Telegram, for ONE bot token.
 export function makeTelegram(token) {
-  async function api(method, body = {}) {
+  // Every request has a time limit: without one, a network that drops silently leaves a bot waiting forever.
+  // (Long polling asks Telegram to answer within 25 s, so getUpdates is given 40 s.)
+  async function api(method, body = {}, { timeoutMs = 30_000 } = {}) {
     const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return res.json();
   }
@@ -23,7 +26,7 @@ export function makeTelegram(token) {
     form.append("chat_id", String(chatId));
     if (caption) form.append("caption", caption);
     form.append("document", new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }), path.basename(filePath));
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form });
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(90_000) });
     const data = await res.json();
     if (!data.ok) throw new Error(data.description ?? "Telegram sendDocument failed");
   }
@@ -36,7 +39,7 @@ export function makeTelegram(token) {
     const ext = (path.extname(filePath) || ".jpg").toLowerCase();
     if (![".jpg", ".jpeg", ".png", ".webp"].includes(ext)) throw new Error("Please send a JPG, PNG or WebP image.");
 
-    const res = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) throw new Error(`File download failed: HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length > 15 * 1024 * 1024) throw new Error("Image is larger than 15 MB.");

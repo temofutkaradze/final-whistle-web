@@ -36,3 +36,44 @@ declare module "*/scripts/lib/football.mjs" {
   export const isFinished: (status: string) => boolean;
   export const isDead: (status: string) => boolean;
 }
+
+declare module "*/scripts/lib/worker-core.mjs" {
+  export function classifyError(e: unknown): "transient" | "permanent";
+  export function createBackoff(o: { baseMs: number; maxMs: number }): {
+    ready(key: string, now: number): boolean;
+    fail(key: string, now: number): number;
+    wait(key: string, now: number, ms: number): void;
+    ok(key: string): void;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export function createWorkerCore(deps: any): {
+    tick(): Promise<void>;
+    expireOld(): Promise<void>;
+    recoverStuck(o?: { all?: boolean }): Promise<number>;
+    cleanup(): Promise<void>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    notify(user: any, text: string): Promise<void>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _state: any;
+  };
+}
+
+declare module "*/scripts/lib/selection.mjs" {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export function toggleSelection(o: { prisma: any; userId: string; fixtureId: number; maxAgeHours: number; now?: number }): Promise<{ result: "no-match" | "already-sent" | "sending" | "too-old" | "removed" | "selected" }>;
+}
+
+declare module "*/scripts/lib/poller.mjs" {
+  export function shouldRestart(entry: { failed?: boolean; retryAt?: number } | undefined, now: number): boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export function runPoller(entry: any, deps: any): Promise<void>;
+}
+
+declare module "*/next.config.mjs" {
+  const config: {
+    poweredByHeader?: boolean;
+    experimental?: { serverActions?: { bodySizeLimit?: string } };
+    headers: () => Promise<{ source: string; headers: { key: string; value: string }[] }[]>;
+  };
+  export default config;
+}
