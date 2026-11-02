@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { createSession, getCurrentUser } from "@/lib/auth";
 import { MAX_PASSWORD, MIN_PASSWORD, hashPassword } from "@/lib/password";
 import GoogleButton from "@/app/google-button";
+import SubmitButton from "@/app/submit-button";
 
 export const dynamic = "force-dynamic";
 
@@ -51,23 +53,45 @@ export default async function SignUp({
         <h1>Create your account</h1>
         <p className="lead">Free while we test. No card needed.</p>
         <div className="card auth-card">
-          {error && ERRORS[error] && <p className="alert">{ERRORS[error]}</p>}
+          {error && ERRORS[error] && (
+            <p className="alert" role="alert" id="signup-error">
+              {ERRORS[error]}
+            </p>
+          )}
           <GoogleButton />
           <form action={createAccount}>
             <label htmlFor="email">
               Email
-              <input id="email" name="email" type="email" required autoComplete="email" autoFocus />
+              <input
+                id="email"
+                name="email"
+                type="email"
+                required
+                autoComplete="email"
+                aria-invalid={error === "email" || error === "exists" || error === "legacy"}
+                aria-describedby={error && ERRORS[error] && error !== "password" ? "signup-error" : undefined}
+              />
             </label>
             <label htmlFor="password">
               Password
-              <input id="password" name="password" type="password" required minLength={MIN_PASSWORD} maxLength={MAX_PASSWORD} autoComplete="new-password" />
-              <small>At least {MIN_PASSWORD} characters.</small>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                minLength={MIN_PASSWORD}
+                maxLength={MAX_PASSWORD}
+                autoComplete="new-password"
+                aria-invalid={error === "password"}
+                aria-describedby={`password-hint${error === "password" ? " signup-error" : ""}`}
+              />
+              <small id="password-hint">At least {MIN_PASSWORD} characters.</small>
             </label>
-            <button type="submit">Create account</button>
+            <SubmitButton label="Create account" pendingLabel="Creating account..." />
           </form>
         </div>
         <p className="auth-switch">
-          Already have an account? <a href="/login">Log in</a>
+          Already have an account? <Link href="/login">Log in</Link>
         </p>
         <p className="auth-note">Next you will connect your Telegram bot and choose your leagues.</p>
       </div>

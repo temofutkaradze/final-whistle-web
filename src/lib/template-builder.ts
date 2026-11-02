@@ -252,10 +252,12 @@ export function buildTemplateHtml(input: BuilderConfig): string {
   const bgFilter = `brightness(${c.bgBrightness}%) saturate(${c.bgSaturate}%)${c.bgBlur ? ` blur(${c.bgBlur}px)` : ""}`;
 
   // ---- page name / logo and league logo corners ----
+  // With a frame around the post, the corner items move inside it.
+  const fo = c.frame === "thick" ? 36 : c.frame === "thin" ? 14 : 0;
   const [vert, horiz] = c.brand.split("-");
   const brandCss =
-    `.branding { position: absolute; z-index: 6; ${vert}: 28px; ` +
-    (horiz === "left" ? "left: 36px; text-align: left; " : horiz === "right" ? "right: 36px; text-align: right; " : "left: 50%; transform: translateX(-50%); text-align: center; ") +
+    `.branding { position: absolute; z-index: 6; ${vert}: ${28 + fo}px; ` +
+    (horiz === "left" ? `left: ${36 + fo}px; text-align: left; ` : horiz === "right" ? `right: ${36 + fo}px; text-align: right; ` : "left: 50%; transform: translateX(-50%); text-align: center; ") +
     `width: max-content; max-width: 420px; color: var(--text); font-size: ${BRAND_PX[c.brandSize]}px; font-weight: var(--w3); line-height: 1; letter-spacing: 1px; text-transform: uppercase; white-space: pre-line; text-shadow: var(--tshadow); --brand-logo-h: ${BRAND_LOGO_H[c.brandSize]}px; --brand-logo-w: ${BRAND_LOGO_W[c.brandSize]}px; }\n` +
     `        .brand-logo { display: block; ${horiz === "center" ? "margin: 0 auto;" : horiz === "right" ? "margin-left: auto;" : ""} }`;
 
@@ -268,7 +270,7 @@ export function buildTemplateHtml(input: BuilderConfig): string {
   } else if (c.showLeague) {
     const lh = c.leagueSpot.split("-")[1];
     leagueBlock = `<div class="league-corner">${leagueImg}</div>`;
-    leagueCss = `.league-corner { position: absolute; z-index: 6; top: 28px; ${lh === "left" ? "left: 36px;" : lh === "right" ? "right: 36px;" : "left: 50%; transform: translateX(-50%);"} }`;
+    leagueCss = `.league-corner { position: absolute; z-index: 6; top: ${28 + fo}px; ${lh === "left" ? `left: ${36 + fo}px;` : lh === "right" ? `right: ${36 + fo}px;` : "left: 50%; transform: translateX(-50%);"} }`;
   }
 
   // ---- teams and score ----

@@ -1,9 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { getCurrentUser } from "@/lib/auth";
-import { logout } from "@/lib/auth-actions";
 import { SITE } from "@/lib/site";
-import ThemeToggle from "./theme-toggle";
+import Header from "./header";
 
 export const metadata: Metadata = {
   title: { default: SITE.name, template: `%s | ${SITE.name}` },
@@ -14,13 +13,13 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   colorScheme: "light dark",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f7f6f3" },
-    { media: "(prefers-color-scheme: dark)", color: "#0e1311" },
+    { media: "(prefers-color-scheme: light)", color: "#fbfbfa" },
+    { media: "(prefers-color-scheme: dark)", color: "#0d0f11" },
   ],
 };
 
 // Runs before the page is painted, so a saved dark choice never flashes white.
-const THEME_SCRIPT = `try{var t=localStorage.getItem("fw-theme");if(t==="dark"||t==="light")document.documentElement.dataset.theme=t}catch(e){}`;
+const THEME_SCRIPT = `try{var t=localStorage.getItem("fw-theme")||(window.matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}`;
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -36,34 +35,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         />
       </head>
       <body>
-        <a className="skip" href="#main">
-          Skip to content
+        <a className="skip-link" href="#main">
+          Skip to main content
         </a>
-        <header className="top">
-          <a href="/" className="brand">
-            {SITE.name}
-          </a>
-          <nav>
-            {user ? (
-              <>
-                <a href="/dashboard">Dashboard</a>
-                <form action={logout}>
-                  <button type="submit" className="ghost sm">
-                    Log out
-                  </button>
-                </form>
-              </>
-            ) : (
-              <>
-                <a href="/login">Log in</a>
-                <a href="/signup" className="btn sm">
-                  Create account
-                </a>
-              </>
-            )}
-            <ThemeToggle />
-          </nav>
-        </header>
+        <Header user={user ? { email: user.email, name: user.name } : null} />
         <main id="main">{children}</main>
       </body>
     </html>

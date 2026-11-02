@@ -5,6 +5,7 @@ import { sendDocument, sendMessage } from "@/lib/telegram";
 import { renderSamplePost } from "@/lib/render";
 import { BUILTIN_TEMPLATES, MAX_CUSTOM_TEMPLATES, builtinTemplateHtml, customTemplateId, isBuiltinTemplate, previewHtml } from "@/lib/templates";
 import { brandInnerHtml } from "@/lib/sample-match";
+import { SITE } from "@/lib/site";
 import { normalizeConfig } from "@/lib/template-builder";
 import { prepareTemplateInput } from "@/lib/template-input";
 import { MAX_LOGO_UPLOAD, deleteLogoFile, logoDataUri, saveLogo } from "@/lib/logos";
@@ -15,6 +16,7 @@ import { clearSessionCookie, requireUser } from "@/lib/auth";
 import AutoRefresh from "./auto-refresh";
 import TemplatePicker from "./template-picker";
 import AddTemplate, { type Editing, type SaveState } from "./add-template";
+import SubmitButton from "@/app/submit-button";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +65,7 @@ async function sendTest() {
   let result = "nochat";
   if (user.telegramChatId && user.botToken) {
     try {
-      await sendMessage(user.telegramChatId, "Test message from Final Whistle. Your chat is connected.", userBotToken(user) as string);
+      await sendMessage(user.telegramChatId, `Test message from ${SITE.name}. Your chat is connected.`, userBotToken(user) as string);
       result = "ok";
     } catch (e) {
       console.error("sendTest failed:", e);
@@ -196,7 +198,6 @@ async function connectBot(formData: FormData) {
   const user = await requireUser();
   const token = String(formData.get("token") ?? "").trim();
   if (!/^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(token)) redirect(back("&bot=format"));
-
 
   let me: { ok?: boolean; result?: { id: number; username?: string } } | null = null;
   try {
@@ -354,25 +355,35 @@ export default async function Dashboard({
         <span className="muted">@{user.botUsername}</span>
       </div>
       <p className="muted" style={{ marginTop: 8 }}>
-        Posts are delivered to your Telegram chat.
+        Posts are delivered directly to your Telegram chat.
       </p>
       <div className="row" style={{ marginTop: 16 }}>
         <form className="plain" action={sendSample}>
-          <button type="submit">Send a sample post</button>
+          <SubmitButton label="Send a sample post" pendingLabel="Sending sample..." variant="default" />
         </form>
         <form className="plain" action={sendTest}>
-          <button type="submit" className="ghost">
-            Send a test message
-          </button>
+          <SubmitButton label="Send a test message" pendingLabel="Sending..." variant="ghost" />
         </form>
       </div>
-      <small style={{ marginTop: 10 }}>Takes a few seconds. The render server must be running (npm run render).</small>
-      {test === "ok" && <p>Test message sent. Check Telegram.</p>}
-      {test === "fail" && <p className="error">Sending failed. See the terminal where `npm run dev` runs.</p>}
-      {sample === "ok" && <p>Sample post sent. Check Telegram.</p>}
+      <small style={{ marginTop: 10, display: "block" }}>Takes a few seconds. The render server must be running (<code>npm run render</code>).</small>
+      {test === "ok" && (
+        <p className="notice ok" role="status" style={{ marginTop: 12 }}>
+          Test message sent. Check Telegram.
+        </p>
+      )}
+      {test === "fail" && (
+        <p className="notice error" role="alert" style={{ marginTop: 12 }}>
+          Sending failed. See the terminal where <code>npm run dev</code> runs.
+        </p>
+      )}
+      {sample === "ok" && (
+        <p className="notice ok" role="status" style={{ marginTop: 12 }}>
+          Sample post sent. Check Telegram.
+        </p>
+      )}
       {sample === "fail" && (
-        <p className="error">
-          Could not create or send the post. Is the render server running? Details are in the terminal where `npm run dev` runs.
+        <p className="notice error" role="alert" style={{ marginTop: 12 }}>
+          Could not create or send the post. Is the render server running? Details are in the terminal where <code>npm run dev</code> runs.
         </p>
       )}
     </>
@@ -380,9 +391,15 @@ export default async function Dashboard({
 
   const waitingBlock = (
     <>
-      <p className="muted" style={{ marginTop: 8 }}>
-        Open your bot @{user.botUsername} and press Start. This page updates by itself.
-      </p>
+      <div className="tg-waiting-banner">
+        <span className="tg-pulse-dot" aria-hidden="true" />
+        <div>
+          <strong style={{ fontSize: 14 }}>Waiting for bot activation</strong>
+          <p className="muted" style={{ marginTop: 2, fontSize: 13 }}>
+            Open your bot <strong>@{user.botUsername}</strong> in Telegram and press <strong>Start</strong>. This page updates automatically.
+          </p>
+        </div>
+      </div>
       <AutoRefresh />
       <p style={{ marginTop: 16 }}>
         <a className="btn" href={`https://t.me/${user.botUsername}`} target="_blank" rel="noreferrer">
@@ -394,18 +411,30 @@ export default async function Dashboard({
 
   const connectForm = (
     <>
-      <small style={{ marginTop: 8 }}>
-        1. In Telegram open @BotFather, send /newbot and choose a name and a username.
-        <br />
-        2. Copy the token it gives you (it looks like 123456789:ABC...).
-        <br />
-        3. Paste it below. Never share this token with anyone.
-        <br />
-        4. Open your bot in Telegram and press Start.
-      </small>
-      <form className="plain" action={connectBot} style={{ marginTop: 16 }}>
-        <input type="text" name="token" placeholder="123456789:ABC..." autoComplete="off" required aria-label="Bot token" />
-        <button type="submit">Connect my bot</button>
+      <ol className="tg-steps">
+        <li>
+          <span className="tg-step-num">1</span>
+          <span>In Telegram open <strong>@BotFather</strong>, send <code>/newbot</code>, and choose a name and username.</span>
+        </li>
+        <li>
+          <span className="tg-step-num">2</span>
+          <span>Copy the HTTP API token BotFather gives you (looks like <code>123456789:ABC...</code>).</span>
+        </li>
+        <li>
+          <span className="tg-step-num">3</span>
+          <span>Paste the token below. Never share this token with anyone.</span>
+        </li>
+        <li>
+          <span className="tg-step-num">4</span>
+          <span>Open your new bot in Telegram and press <strong>Start</strong>.</span>
+        </li>
+      </ol>
+      <form className="plain" action={connectBot} style={{ marginTop: 18 }}>
+        <label htmlFor="bot-token">
+          Bot token
+          <input id="bot-token" type="text" name="token" placeholder="123456789:ABC..." autoComplete="off" required aria-label="Bot token from BotFather" />
+        </label>
+        <SubmitButton label="Connect my bot" pendingLabel="Connecting..." variant="default" style={{ marginTop: 4 }} />
       </form>
     </>
   );
@@ -415,7 +444,7 @@ export default async function Dashboard({
 
   // Live previews of every template with this customer's page name or logo (invented sample match).
   const currentLogo = brand?.logoPath ? await logoDataUri(brand.logoPath) : null;
-  const brandHtml = brandInnerHtml(brand?.name ?? "Final Whistle", brand?.brandMode === "logo" ? currentLogo : null);
+  const brandHtml = brandInnerHtml(brand?.name ?? SITE.name, brand?.brandMode === "logo" ? currentLogo : null);
   const customTemplates = await prisma.template.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: "asc" },
@@ -440,7 +469,6 @@ export default async function Dashboard({
     })),
   ];
 
-
   // Edit mode (?edit=<template key>): a built-in template opens as HTML (and is saved as a new template),
   // the customer's own template opens as it was made (options form, or HTML code).
   let editing: Editing | null = null;
@@ -463,10 +491,15 @@ export default async function Dashboard({
 
       {!allDone && (
         <section className="card" aria-labelledby="first-post" style={{ marginTop: 24 }}>
-          <strong id="first-post">Get your first post</strong>
+          <div className="todo-header">
+            <strong id="first-post" className="todo-title">Get your first post</strong>
+            <span className="todo-badge">
+              {firstSteps.filter((st) => st.done).length} of {firstSteps.length} complete
+            </span>
+          </div>
           <ol className="todo">
             {firstSteps.map((st) => (
-              <li key={st.title}>
+              <li key={st.title} className={st.done ? "completed" : ""}>
                 <span className={st.done ? "dot done" : "dot"} aria-hidden="true">
                   {st.done && (
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -492,14 +525,16 @@ export default async function Dashboard({
           <h2 className="card-title" id="t-tg">
             Telegram
           </h2>
-          {bot && BOT_MESSAGES[bot] && <p className={bot === "ok" || bot === "removed" ? "" : "error"}>{BOT_MESSAGES[bot]}</p>}
+          {bot && BOT_MESSAGES[bot] && (
+            <p className={bot === "ok" || bot === "removed" ? "notice ok" : "notice error"} role={bot === "ok" || bot === "removed" ? "status" : "alert"} style={{ marginTop: 12 }}>
+              {BOT_MESSAGES[bot]}
+            </p>
+          )}
           {user.botToken ? (
             <>
               {user.telegramChatId ? connectedBlock : waitingBlock}
               <form className="plain" action={disconnectBot} style={{ marginTop: 18 }}>
-                <button type="submit" className="ghost sm">
-                  Disconnect this bot
-                </button>
+                <SubmitButton label="Disconnect this bot" pendingLabel="Disconnecting..." variant="ghost" className="sm" />
               </form>
             </>
           ) : (
@@ -512,7 +547,11 @@ export default async function Dashboard({
             Page
           </h2>
           <p className="muted">The name printed on every post.</p>
-          {page && PAGE_MESSAGES[page] && <p className={PAGE_MESSAGES[page].ok ? "notice" : "error"}>{PAGE_MESSAGES[page].text}</p>}
+          {page && PAGE_MESSAGES[page] && (
+            <p className={PAGE_MESSAGES[page].ok ? "notice ok" : "notice error"} role={PAGE_MESSAGES[page].ok ? "status" : "alert"} style={{ marginTop: 12 }}>
+              {PAGE_MESSAGES[page].text}
+            </p>
+          )}
           {brand && (
             <form className="plain" action={renamePage} style={{ marginTop: 16 }}>
               <input type="hidden" name="brandId" value={brand.id} />
@@ -520,7 +559,7 @@ export default async function Dashboard({
                 Page name
                 <input id={`name-${brand.id}`} name="name" type="text" defaultValue={brand.name} maxLength={60} required />
               </label>
-              <button type="submit">Save name</button>
+              <SubmitButton label="Save name" pendingLabel="Saving..." variant="default" />
             </form>
           )}
         </section>
@@ -530,7 +569,11 @@ export default async function Dashboard({
             Template and logo
           </h2>
           <p className="muted">The look of every post. Previews use an invented match and update after you save.</p>
-          {look && LOOK_MESSAGES[look] && <p className={LOOK_MESSAGES[look].ok ? "notice" : "error"}>{LOOK_MESSAGES[look].text}</p>}
+          {look && LOOK_MESSAGES[look] && (
+            <p className={LOOK_MESSAGES[look].ok ? "notice ok" : "notice error"} role={LOOK_MESSAGES[look].ok ? "status" : "alert"} style={{ marginTop: 12 }}>
+              {LOOK_MESSAGES[look].text}
+            </p>
+          )}
           {brand && (
             <form className="plain" action={saveLook} style={{ marginTop: 8 }}>
               <TemplatePicker tiles={tiles} current={brand.templateRef} canAdd={customTemplates.length < MAX_CUSTOM_TEMPLATES} deleteAction={deleteTemplate} />
@@ -559,7 +602,7 @@ export default async function Dashboard({
                   </div>
                 )}
               </fieldset>
-              <button type="submit">Save look</button>
+              <SubmitButton label="Save look" pendingLabel="Saving..." variant="default" />
             </form>
           )}
           <div id="add-template" className="add-panel">
@@ -570,7 +613,7 @@ export default async function Dashboard({
         <details className="card wide leagues">
           <summary>
             <span className="card-title">Leagues and clubs</span>
-            <span className="muted">
+            <span className="summary-badge">
               {chosenLeagues.size} {chosenLeagues.size === 1 ? "league" : "leagues"} · {chosenTeams.size}{" "}
               {chosenTeams.size === 1 ? "club" : "clubs"}
             </span>
@@ -582,32 +625,47 @@ export default async function Dashboard({
             <div>
               {LEAGUES.map((l) => {
                 const clubs = allTeams.filter((t) => t.leagueId === l.id);
+                const isLeagueChosen = chosenLeagues.has(l.id);
+                const selectedClubsInLeague = clubs.filter((t) => chosenTeams.has(t.id)).length;
                 return (
                   <details key={l.id} className="lrow">
-                    <summary>
-                      <label className="check" style={{ display: "inline-flex", padding: 0 }}>
-                        <input type="checkbox" name="leagues" value={l.id} defaultChecked={chosenLeagues.has(l.id)} />
-                        {l.name}
+                    <summary className="lrow-summary">
+                      <label className="check lrow-check" htmlFor={`league-${l.id}`}>
+                        <input id={`league-${l.id}`} type="checkbox" name="leagues" value={l.id} defaultChecked={isLeagueChosen} />
+                        <span className="lrow-title">{l.name}</span>
                       </label>
+                      <span className="lrow-meta">
+                        {isLeagueChosen ? (
+                          <span className="pill ok sm">All matches followed</span>
+                        ) : selectedClubsInLeague > 0 ? (
+                          <span className="pill sm">
+                            {selectedClubsInLeague} {selectedClubsInLeague === 1 ? "club" : "clubs"} followed
+                          </span>
+                        ) : (
+                          <span className="summary-badge sm">{clubs.length} clubs</span>
+                        )}
+                      </span>
                     </summary>
-                    {clubs.length === 0 ? (
-                      <small>No clubs loaded for this league yet.</small>
-                    ) : (
-                      <div className="clubs">
-                        {clubs.map((t) => (
-                          <label className="check" key={t.id}>
-                            <input type="checkbox" name="teams" value={t.id} defaultChecked={chosenTeams.has(t.id)} />
-                            {t.name}
-                          </label>
-                        ))}
-                      </div>
-                    )}
+                    <div className="lrow-body">
+                      {clubs.length === 0 ? (
+                        <small className="lrow-empty">No clubs loaded for this league yet.</small>
+                      ) : (
+                        <div className="clubs">
+                          {clubs.map((t) => (
+                            <label className="check" key={t.id} htmlFor={`team-${t.id}`}>
+                              <input id={`team-${t.id}`} type="checkbox" name="teams" value={t.id} defaultChecked={chosenTeams.has(t.id)} />
+                              {t.name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </details>
                 );
               })}
             </div>
-            <button type="submit">Save</button>
-            {saved === "1" && <p>Saved. Send /matches in Telegram to see the new list.</p>}
+            <SubmitButton label="Save leagues & clubs" pendingLabel="Saving..." variant="default" style={{ marginTop: 16 }} />
+            {saved === "1" && <p className="notice ok" role="status" style={{ marginTop: 14 }}>Saved. Send /matches in Telegram to see the new list.</p>}
           </form>
         </details>
       </div>
@@ -619,15 +677,17 @@ export default async function Dashboard({
             This permanently deletes your pages, your saved bot token, your selected matches and the background photos
             stored for you. The bot itself stays in @BotFather. It cannot be undone.
           </p>
-          {acct && ACCOUNT_MESSAGES[acct] && <p className="error">{ACCOUNT_MESSAGES[acct]}</p>}
-          <form action={deleteAccount} style={{ marginTop: 12 }}>
+          {acct && ACCOUNT_MESSAGES[acct] && (
+            <p className="notice error" role="alert" style={{ marginTop: 12 }}>
+              {ACCOUNT_MESSAGES[acct]}
+            </p>
+          )}
+          <form action={deleteAccount} style={{ marginTop: 14 }}>
             <label htmlFor="confirm">
               Type your email ({user.email}) to confirm
-              <input id="confirm" name="confirm" type="text" autoComplete="off" required />
+              <input id="confirm" name="confirm" type="text" autoComplete="off" required aria-label={`Type ${user.email} to confirm account deletion`} />
             </label>
-            <button type="submit" className="ghost danger-btn">
-              Delete my account
-            </button>
+            <SubmitButton label="Delete my account" pendingLabel="Deleting..." variant="danger" style={{ alignSelf: "flex-start", marginTop: 4 }} />
           </form>
         </div>
       </details>

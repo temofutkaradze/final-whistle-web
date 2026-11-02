@@ -1,13 +1,27 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 // Light / dark switch. The choice is remembered in this browser; until the visitor picks one,
 // the page follows the device setting.
 export default function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark" | null>(null);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const current =
+      (root.dataset.theme as "light" | "dark") ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    setTheme(current);
+  }, []);
+
   function toggle() {
     const root = document.documentElement;
-    const current = root.dataset.theme ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const current =
+      root.dataset.theme ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     const next = current === "dark" ? "light" : "dark";
     root.dataset.theme = next;
+    setTheme(next);
     try {
       localStorage.setItem("fw-theme", next);
     } catch {
@@ -15,8 +29,18 @@ export default function ThemeToggle() {
     }
   }
 
+  const nextTheme = theme === "dark" ? "light" : "dark";
+  const ariaLabel = theme ? `Switch to ${nextTheme} theme` : "Switch between light and dark theme";
+
   return (
-    <button type="button" className="theme-toggle" onClick={toggle} aria-label="Switch between light and dark mode" title="Switch theme">
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={toggle}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      aria-pressed={theme === "dark"}
+    >
       <svg className="i-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
       </svg>

@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { createSession, getCurrentUser, loginLimiter } from "@/lib/auth";
 import { MAX_PASSWORD, verifyPassword } from "@/lib/password";
 import GoogleButton from "@/app/google-button";
+import SubmitButton from "@/app/submit-button";
 
 export const dynamic = "force-dynamic";
 
@@ -47,23 +49,47 @@ export default async function Login({
         <h1>Welcome back</h1>
         <p className="lead">Log in to manage your bot and your posts.</p>
         <div className="card auth-card">
-          {deleted === "1" && <p className="alert ok">Your account and its data were deleted.</p>}
-          {error && ERRORS[error] && <p className="alert">{ERRORS[error]}</p>}
+          {deleted === "1" && (
+            <p className="alert ok" role="status">
+              Your account and its data were deleted.
+            </p>
+          )}
+          {error && ERRORS[error] && (
+            <p className="alert" role="alert" id="login-error">
+              {ERRORS[error]}
+            </p>
+          )}
           <GoogleButton />
           <form action={login}>
             <label htmlFor="email">
               Email
-              <input id="email" name="email" type="email" required autoComplete="email" autoFocus />
+              <input
+                id="email"
+                name="email"
+                type="email"
+                required
+                autoComplete="email"
+                aria-invalid={Boolean(error)}
+                aria-describedby={error && ERRORS[error] ? "login-error" : undefined}
+              />
             </label>
             <label htmlFor="password">
               Password
-              <input id="password" name="password" type="password" required autoComplete="current-password" />
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                autoComplete="current-password"
+                aria-invalid={Boolean(error)}
+                aria-describedby={error && ERRORS[error] ? "login-error" : undefined}
+              />
             </label>
-            <button type="submit">Log in</button>
+            <SubmitButton label="Log in" pendingLabel="Logging in..." />
           </form>
         </div>
         <p className="auth-switch">
-          New here? <a href="/signup">Create an account</a>
+          New here? <Link href="/signup">Create account</Link>
         </p>
         <p className="auth-note">Demo build: there is no password reset yet.</p>
       </div>

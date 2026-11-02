@@ -24,6 +24,11 @@ export default function TemplatePicker({
             <input type="radio" name="template" value={t.key} defaultChecked={t.key === current} />
             <span className="tpl-frame">
               <iframe srcDoc={t.html} sandbox="" title={`${t.name} preview`} tabIndex={-1} scrolling="no" loading="lazy" />
+              <span className="tpl-check" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 7.5L5.5 10.5L11.5 3.5" />
+                </svg>
+              </span>
             </span>
             <span className="tpl-name">{t.name}</span>
             <small>{t.note}</small>
@@ -41,7 +46,7 @@ export default function TemplatePicker({
         </div>
       ))}
       {canAdd ? (
-        <a className="tpl-add" href="/dashboard#add-template" aria-label="Add a template">
+        <a className="tpl-add" href="/dashboard#add-template">
           <span className="tpl-plus" aria-hidden="true">
             +
           </span>

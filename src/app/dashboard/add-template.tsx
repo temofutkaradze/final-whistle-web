@@ -134,7 +134,7 @@ function CheckField({ label, checked, onChange }: { label: string; checked: bool
 
 function PreviewFrame({ html, title }: { html: string; title: string }) {
   return (
-    <div className="add-preview" aria-label={title}>
+    <div className="add-preview" role="region" aria-label={title}>
       {html ? <iframe srcDoc={html} sandbox="" title={title} tabIndex={-1} scrolling="no" /> : <p>Nothing to preview yet.</p>}
     </div>
   );
@@ -170,6 +170,21 @@ export default function AddTemplate({
   const baseReason = !name.trim() ? "Give the template a name." : full && !overwriting ? `You have ${max} own templates. Delete one, or overwrite this one.` : "";
   const buildReason = baseReason;
   const htmlReason = baseReason || (!result ? "Paste or open some HTML first." : !result.ok ? "Fix the problems shown in red first." : "");
+
+  // ARIA tabs pattern: only the selected tab is in the Tab order; arrow keys, Home and End move between the tabs.
+  function onTabKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const order = ["build", "html"] as const;
+    const i = order.indexOf(tab);
+    let next: (typeof order)[number] | null = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = order[(i + 1) % order.length];
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = order[(i + order.length - 1) % order.length];
+    else if (e.key === "Home") next = order[0];
+    else if (e.key === "End") next = order[order.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    setTab(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  }
 
   function loadFile(file: File | undefined) {
     if (!file || file.size > 400_000) return;
@@ -210,16 +225,35 @@ export default function AddTemplate({
       </div>
       <p className="muted">You have {used} of {max} own templates.</p>
 
-      <div className="tabs" role="tablist">
-        <button type="button" role="tab" aria-selected={tab === "build"} className={tab === "build" ? "tab on" : "tab"} onClick={() => setTab("build")}>
+      <div className="tabs" role="tablist" aria-label="Template creation modes" onKeyDown={onTabKeyDown}>
+        <button
+          type="button"
+          role="tab"
+          id="tab-build"
+          aria-controls="panel-build"
+          aria-selected={tab === "build"}
+          tabIndex={tab === "build" ? 0 : -1}
+          className={tab === "build" ? "tab on" : "tab"}
+          onClick={() => setTab("build")}
+        >
           Build it here
         </button>
-        <button type="button" role="tab" aria-selected={tab === "html"} className={tab === "html" ? "tab on" : "tab"} onClick={() => setTab("html")}>
+        <button
+          type="button"
+          role="tab"
+          id="tab-html"
+          aria-controls="panel-html"
+          aria-selected={tab === "html"}
+          tabIndex={tab === "html" ? 0 : -1}
+          className={tab === "html" ? "tab on" : "tab"}
+          onClick={() => setTab("html")}
+        >
           HTML code
         </button>
       </div>
 
       {tab === "build" && (
+        <div id="panel-build" role="tabpanel" aria-labelledby="tab-build">
         <form action={formAction} className="plain add-form">
           <input type="hidden" name="kind" value="build" />
           <input type="hidden" name="config" value={JSON.stringify(cfg)} />
@@ -227,7 +261,7 @@ export default function AddTemplate({
             <div className="add-controls">
               <label htmlFor="b-name">
                 Template name
-                <input id="b-name" name="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required placeholder="My template" />
+                <input id="b-name" type="text" name="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required placeholder="My template" />
               </label>
 
               <fieldset className="b-group">
@@ -316,11 +350,20 @@ export default function AddTemplate({
             </div>
             <PreviewFrame html={builtPreview} title="Preview of your template" />
           </div>
-          {state?.error && <p className="error" role="alert">{state.error}</p>}
+          {state?.error && <p className="notice error" role="alert">{state.error}</p>}
           {buildReason && <p className="muted">{buildReason}</p>}
           <div className="row">
             <button type="submit" disabled={!!buildReason || pending}>
-              {pending ? "Saving..." : "Save template"}
+              {pending ? (
+                <span className="btn-spinner-wrap">
+                  <svg className="btn-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                  Saving...
+                </span>
+              ) : (
+                "Save template"
+              )}
             </button>
             <button
               type="button"
@@ -334,16 +377,18 @@ export default function AddTemplate({
             </button>
           </div>
         </form>
+        </div>
       )}
 
       {tab === "html" && (
+        <div id="panel-html" role="tabpanel" aria-labelledby="tab-html">
         <form action={formAction} className="plain add-form">
           <input type="hidden" name="kind" value="html" />
           <div className="add-cols">
             <div className="add-controls">
               <label htmlFor="h-name">
                 Template name
-                <input id="h-name" name="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required placeholder="My template" />
+                <input id="h-name" type="text" name="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required placeholder="My template" />
               </label>
               <label htmlFor="h-html">
                 HTML
@@ -365,7 +410,7 @@ export default function AddTemplate({
                   ))}
                 </ul>
               )}
-              {result && result.ok && <p className="notice">The template passed the safety check.</p>}
+              {result && result.ok && <p className="notice ok" role="status">The template passed the safety check.</p>}
               {result && result.warnings.length > 0 && (
                 <ul className="check-list">
                   {result.warnings.map((w) => (
@@ -388,12 +433,22 @@ export default function AddTemplate({
             </div>
             <PreviewFrame html={htmlPreview} title="Preview of your HTML" />
           </div>
-          {state?.error && <p className="error" role="alert">{state.error}</p>}
+          {state?.error && <p className="notice error" role="alert">{state.error}</p>}
           {htmlReason && <p className="muted">{htmlReason}</p>}
           <button type="submit" disabled={!!htmlReason || pending}>
-            {pending ? "Saving..." : "Save template"}
+            {pending ? (
+              <span className="btn-spinner-wrap">
+                <svg className="btn-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+                Saving...
+              </span>
+            ) : (
+              "Save template"
+            )}
           </button>
         </form>
+        </div>
       )}
     </div>
   );
