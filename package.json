@@ -12,7 +12,10 @@
     "postinstall": "prisma generate",
     "worker": "node --env-file=.env scripts/worker.mjs",
     "seed:teams": "node --env-file=.env scripts/seed-teams.mjs",
-    "render": "node --env-file=.env render/render-server.js"
+    "render": "node --env-file=.env render/render-server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
@@ -27,6 +30,8 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "prisma": "^6.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vite": "^6.4.0",
+    "vitest": "^3.2.4"
   }
 }

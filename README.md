@@ -163,3 +163,26 @@ template (the built-in files never change). A customer's own template opens as i
 saving, the customer chooses "overwrite" or "save as a new template". The options form has about 30 options
 (`BuilderConfig` in `src/lib/template-builder.ts`; older saved configs get defaults for new options). Form input is checked
 server-side in `src/lib/template-input.ts`.
+
+## Tests
+
+    npm test            run all tests once (about 15 seconds)
+    npm run test:watch  run them again on every file change
+    npm run typecheck   TypeScript check of the site and of the tests
+
+The tests need no database, no internet and no browser. What they cover (`tests/`):
+
+- `password`, `crypto`: password hashing, session tokens, the login limiter, bot-token encryption, and that the website and the
+  bot/worker (two separate copies of the code) can read each other's encrypted tokens.
+- `template-check`, `template-builder`, `template-input`: the safety check for customer templates (30 attack samples),
+  every option of the template builder, and the server side of the Add / Edit template form.
+- `google`: the helper functions of "Continue with Google" (PKCE vector from RFC 7636, state, only a verified email is accepted,
+  code exchange with a fake Google).
+- `logos`: logo upload (only real PNG / JPEG / WebP, always re-encoded, never outside `storage/logos`).
+- `events`: the scorers and cards on a post (own goals, penalties, second yellows, grouping, escaping, row limit).
+- `football-time`: a customer's local day in any time zone, including the days clocks change, and the free-plan limits.
+- `render-server`: `render/render-server.js` is started as its own process with a fake Chromium
+  (`tests/helpers/fake-playwright.cjs`): template choice, escaping, logo rules, customer templates and the request guard.
+
+Not covered (check by hand): Google login, Telegram (token, Start, delivery), the real database, and that real Chromium draws
+the templates well (`npm run render`, then "Send a sample post" on the dashboard).
