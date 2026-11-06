@@ -1,8 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-// Tests live in tests/. They need no database, no network and no browser: everything that talks to the outside
-// (Postgres, Telegram, API-Football, Chromium) is replaced or left out. Run them with:  npm test
+// Tests use mocked Postgres, Telegram and API-Football; no production credentials are needed.
+// News renderer integration tests require installed Playwright Chromium and an ephemeral local port.
+// Match renderer tests use a fake browser. Run all tests with: npm test
 export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   test: {

@@ -1,6 +1,8 @@
-# Final Whistle (demo)
+# Final Whistle
 
-Next.js + Prisma + PostgreSQL (Neon). Demo only: no passwords, no payments.
+Next.js + Prisma + PostgreSQL (Neon), with Google/password login, Match and News Telegram generators, and a shared Chromium/Sharp JPG renderer.
+
+> Existing production installation: do not rerun `INSTALL_NEWS.cmd` or the historical `db:push` setup instructions below. The four-column News migration has already been applied. Review [the production audit and proposed cleanup](docs/PRODUCTION_AUDIT.md) before changing schema, dependencies, authentication, or deployment.
 
 ## Run locally (Windows)
 
@@ -15,7 +17,7 @@ Check the database connection: http://localhost:3000/api/health
 
 - `prisma/schema.prisma`: User, Brand, Subscription tables
 - `src/app/signup`: sign-up form (email + password only; the page name, bot and leagues are set on the dashboard)
-- `src/app/dashboard`: shows an account by email
+- `src/app/dashboard`: session-protected entry point for Match and News settings
 - `src/lib/leagues.ts`: league ids shared with the n8n workflow
 
 ## Worker (match posts)
@@ -158,7 +160,7 @@ On the dashboard, in "Template and logo", the "+" tile opens "Add a template". A
 - The worker reads the template html from the database and sends it as `template_html`. A deleted template falls back to Classic.
 - After pulling this change: `npm run db:push` (stop dev, bot and worker first).
 
-Every template tile has an **Edit** link (`/dashboard?edit=<key>`). A built-in template opens as HTML and is always saved as a new
+Every template tile has an **Edit** link (`/dashboard/match?edit=<key>`). A built-in template opens as HTML and is always saved as a new
 template (the built-in files never change). A customer's own template opens as it was made (options form or HTML) and, when
 saving, the customer chooses "overwrite" or "save as a new template". The options form has about 30 options
 (`BuilderConfig` in `src/lib/template-builder.ts`; older saved configs get defaults for new options). Form input is checked
@@ -170,7 +172,7 @@ server-side in `src/lib/template-input.ts`.
     npm run test:watch  run them again on every file change
     npm run typecheck   TypeScript check of the site and of the tests
 
-The tests need no database, no internet and no browser. What they cover (`tests/`):
+Tests use mocked database and Telegram APIs. The News renderer suite uses real Chromium on a temporary local port; install its matching browser with `npx --no-install playwright install chromium` before running tests. CI installs Chromium and its Linux dependencies. Match renderer tests use a fake browser. What the tests cover (`tests/`):
 
 - `password`, `crypto`: password hashing, session tokens, the login limiter, bot-token encryption, and that the website and the
   bot/worker (two separate copies of the code) can read each other's encrypted tokens.
@@ -189,8 +191,7 @@ The tests need no database, no internet and no browser. What they cover (`tests/
 - `render-server`: `render/render-server.js` is started as its own process with a fake Chromium
   (`tests/helpers/fake-playwright.cjs`): template choice, escaping, logo rules, customer templates and the request guard.
 
-Not covered (check by hand): Google login, Telegram (token, Start, delivery), the real database, and that real Chromium draws
-the templates well (`npm run render`, then "Send a sample post" on the dashboard).
+Check Google login and live Telegram delivery manually. News tests cover real Chromium output; the audit also compared all four News and four Match layouts before/after. See docs/PRODUCTION_AUDIT.md for scope and limitations.
 
 ## How the worker and the bot handle problems
 
@@ -218,6 +219,4 @@ The worker (`scripts/worker.mjs`, logic in `scripts/lib/worker-core.mjs`) and th
   on every pull request. **Dependabot** (`.github/dependabot.yml`) opens a weekly pull request for new dependency versions.
 - `getCurrentUser()` (`src/lib/auth.ts`) is remembered for the length of one request (`cache()`): a page load asks the database
   for the session once instead of three times.
-- Known `npm audit` findings that are not fixed on purpose: `postcss` (inside Next.js 15, used only while building the CSS of
-  this project) and the Prisma command-line tool (build time only). Both need a major upgrade (Next.js 16, Prisma 7), which is a
-  separate step. The critical Next.js problems (image optimisation and server actions) are fixed by Next.js 15.5.28.
+- The 2026-11-05 audit reported zero known dependency vulnerabilities for the installed lockfile. This is not a guarantee of application security; see docs/PRODUCTION_AUDIT.md for the confirmed runtime findings and approval-gated fixes.

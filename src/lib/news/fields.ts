@@ -1,0 +1,25 @@
+import type { NewsStyle } from './parse';
+
+export const NEWS_FIELDS: {key:keyof NewsStyle;label:string;min:number;max:number;step?:number;group:string}[] = [
+  {key:'textSize',label:'Quote size (px)',min:28,max:150,group:'Typography'},
+  {key:'lineHeight',label:'Line spacing',min:0.9,max:1.6,step:0.01,group:'Typography'},
+  {key:'letterSpacing',label:'Letter spacing (px)',min:-3,max:12,step:0.5,group:'Typography'},
+  {key:'authorSize',label:'Author size (px)',min:12,max:70,group:'Typography'},
+  {key:'authorTracking',label:'Author letter spacing (px)',min:0,max:12,step:0.5,group:'Typography'},
+  {key:'breakingSize',label:'Breaking summary size (px)',min:18,max:100,group:'Typography'},
+  {key:'textTop',label:'Text vertical offset (px)',min:-300,max:250,group:'Text placement'},
+  {key:'textBottom',label:'Text bottom inset (px)',min:0,max:500,group:'Text placement'},
+  {key:'textInset',label:'Text side inset (px)',min:20,max:250,group:'Text placement'},
+  {key:'authorGap',label:'Space above author (px)',min:0,max:130,group:'Text placement'},
+  {key:'shadeHeight',label:'Photo shade height (px)',min:200,max:1350,group:'Text placement'},
+  {key:'backgroundX',label:'Background focal X (%)',min:0,max:100,group:'Image crops'},
+  {key:'backgroundY',label:'Background focal Y (%)',min:0,max:100,group:'Image crops'},
+  {key:'backgroundZoom',label:'Background zoom',min:1,max:4,step:0.05,group:'Image crops'},
+  {key:'secondaryX',label:'Secondary focal X (%)',min:0,max:100,group:'Image crops'},
+  {key:'secondaryY',label:'Secondary focal Y (%)',min:0,max:100,group:'Image crops'},
+  {key:'secondaryZoom',label:'Secondary zoom',min:1,max:4,step:0.05,group:'Image crops'},
+  {key:'circleTop',label:'Secondary top (px)',min:0,max:650,group:'Secondary image'},
+  {key:'circleInset',label:'Secondary side inset (px)',min:0,max:300,group:'Secondary image'},
+  {key:'circleSize',label:'Secondary size (px)',min:180,max:700,group:'Secondary image'},
+  {key:'circleBorder',label:'Secondary border (px)',min:0,max:30,group:'Secondary image'},
+];

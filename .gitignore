@@ -10,3 +10,8 @@ storage/
 render/cache/
 render/rendered/
 render/output/
+
+# Local environment variants and compiler caches
+.env.*
+!.env.example
+*.tsbuildinfo

@@ -16,6 +16,7 @@ import {
   normalizeConfig,
   type BuilderConfig,
 } from "@/lib/template-builder";
+import { previewDocument } from "../render/final-document.js";
 import { checkTemplateHtml } from "../render/template-check.js";
 
 // Every generated template must pass the safety check, fill completely and keep the layout block on the image.
@@ -26,6 +27,7 @@ function expectGood(cfg: BuilderConfig, label: string) {
   expect(html, label).not.toMatch(/NaN|undefined|\[object/);
   const filled = fillPlaceholders(html, brandInnerHtml("Final Whistle", null));
   expect(filled, label).not.toMatch(/\{\{[A-Z_]+\}\}/);
+  expect(previewDocument(filled), label).not.toBe("");
   const top = Number(html.match(/\.scoreboard \{[^}]*top: (\d+)px/)?.[1]);
   expect(top, label).toBeGreaterThanOrEqual(0);
   expect(top, label).toBeLessThanOrEqual(1350);

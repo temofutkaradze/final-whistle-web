@@ -4,6 +4,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 // Only Node's built-in crypto is used (no extra packages). This file has no Next.js or database imports.
 
 export const MIN_PASSWORD = 8;
+export const MAX_EMAIL = 254;
 export const MAX_PASSWORD = 200; // scrypt is slow on purpose, so very long inputs are refused
 
 const KEYLEN = 64;
@@ -62,6 +63,8 @@ export class LoginLimiter {
   }
 
   allowed(key: string): boolean {
+    for (const [id,entry] of this.entries) if(this.now()-entry.first>this.windowMs)this.entries.delete(id);
+    if (!this.entries.has(key) && this.entries.size >= 4096) return false;
     const e = this.entries.get(key);
     if (!e) return true;
     if (this.now() - e.first > this.windowMs) {
@@ -73,7 +76,10 @@ export class LoginLimiter {
 
   fail(key: string): void {
     const e = this.entries.get(key);
-    if (!e || this.now() - e.first > this.windowMs) this.entries.set(key, { count: 1, first: this.now() });
+    if (!e || this.now() - e.first > this.windowMs) {
+      if(this.entries.size>=4096&&!this.entries.has(key))return;
+      this.entries.set(key, { count: 1, first: this.now() });
+    }
     else e.count += 1;
   }
 

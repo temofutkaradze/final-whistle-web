@@ -57,17 +57,19 @@ export function buildAuthUrl(args: { clientId: string; redirectUri: string; stat
   return url.toString();
 }
 
-export type GoogleProfile = { email: string; name: string | null };
+export type GoogleProfile = { subject: string; email: string; name: string | null };
 
 // Only an email that Google itself says is verified is accepted.
 export function parseProfile(info: unknown): GoogleProfile | null {
   if (!info || typeof info !== "object") return null;
   const o = info as Record<string, unknown>;
+  const subject = typeof o.sub === 'string' ? o.sub : '';
+  if (!subject || subject.length > 255 || /[\s\x00-\x1f\x7f]/.test(subject)) return null;
   const verified = o.email_verified === true || o.email_verified === "true";
   const email = typeof o.email === "string" ? o.email.trim().toLowerCase() : "";
   if (!verified || !email.includes("@") || email.length > 254) return null;
   const name = typeof o.name === "string" && o.name.trim() ? o.name.trim().slice(0, 120) : null;
-  return { email, name };
+  return { subject, email, name };
 }
 
 // Trades the one-time code for the signed-in person's verified profile. Throws on any problem.

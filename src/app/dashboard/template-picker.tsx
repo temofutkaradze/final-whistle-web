@@ -34,7 +34,7 @@ export default function TemplatePicker({
             <small>{t.note}</small>
           </label>
           <div className="tpl-actions">
-            <a className="btn ghost tpl-sm" href={`/dashboard?edit=${encodeURIComponent(t.key)}#add-template`}>
+            <a className="btn ghost tpl-sm" href={`/dashboard/match?edit=${encodeURIComponent(t.key)}#add-template`}>
               Edit
             </a>
             {t.custom && (
@@ -46,7 +46,7 @@ export default function TemplatePicker({
         </div>
       ))}
       {canAdd ? (
-        <a className="tpl-add" href="/dashboard#add-template">
+        <a className="tpl-add" href="/dashboard/match#add-template">
           <span className="tpl-plus" aria-hidden="true">
             +
           </span>

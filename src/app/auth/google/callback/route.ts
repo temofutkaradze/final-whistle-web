@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { resolveGoogleUser, type GoogleSignInResult } from "@/lib/google-auth";
 import { createSession } from "@/lib/auth";
 import { OAUTH_COOKIE, appOrigin, exchangeCodeForProfile, googleConfigured, redirectUri, sameValue, type GoogleProfile } from "@/lib/google";
 
@@ -33,20 +33,16 @@ export async function GET(request: Request) {
   }
   if (!profile) redirect("/login?error=google");
 
-  // Google confirmed that this email belongs to the person, so an existing account with the same email is
-  // simply logged in (this also lets old test accounts without a password in). Otherwise create the account.
-  let user = await prisma.user.findUnique({ where: { email: profile.email } });
-  if (!user) {
-    try {
-      user = await prisma.user.create({
-        data: { email: profile.email, name: profile.name, brands: { create: { name: "My page" } } },
-      });
-    } catch {
-      user = await prisma.user.findUnique({ where: { email: profile.email } }); // two sign-ins at the same moment
-    }
+  let result: GoogleSignInResult;
+  try {
+    result = await resolveGoogleUser(profile);
+  } catch {
+    // Do not expose database details or fall back to email if identity storage is unavailable.
+    console.error('Google identity resolution failed.');
+    redirect('/login?error=google');
   }
-  if (!user) redirect("/login?error=google");
+  if (!result.ok) redirect('/login?error=google_account');
 
-  await createSession(user.id);
+  await createSession(result.userId);
   redirect("/dashboard");
 }

@@ -6,7 +6,8 @@
 // The preview is a sandboxed iframe: no script runs in it.
 
 import { useActionState, useId, useMemo, useState } from "react";
-import { checkTemplateHtml, withCsp } from "../../../render/template-check.js";
+import { checkTemplateHtml } from "../../../render/template-check.js";
+import { previewDocument } from "../../../render/final-document.js";
 import { fillPlaceholders } from "@/lib/sample-match";
 import {
   BRAND_SPOTS,
@@ -162,8 +163,8 @@ export default function AddTemplate({
   const set = <K extends keyof BuilderConfig>(key: K, value: BuilderConfig[K]) => setCfg((c) => ({ ...c, [key]: value }));
 
   const result = useMemo(() => (html.trim() ? checkTemplateHtml(html) : null), [html]);
-  const htmlPreview = result?.ok ? withCsp(fillPlaceholders(html, brandHtml)) : "";
-  const builtPreview = useMemo(() => withCsp(fillPlaceholders(buildTemplateHtml(cfg), brandHtml)), [cfg, brandHtml]);
+  const htmlPreview = result?.ok ? previewDocument(fillPlaceholders(html, brandHtml)) : "";
+  const builtPreview = useMemo(() => previewDocument(fillPlaceholders(buildTemplateHtml(cfg), brandHtml)), [cfg, brandHtml]);
 
   const full = used >= max;
   const overwriting = !!editing?.ownId && saveMode === "overwrite";

@@ -7,6 +7,10 @@
 
 import { unlink } from "node:fs/promises";
 import { prisma } from "./lib/db.mjs";
+import {acquireProcessLock,processLockClient,PROCESS_LOCKS} from "./lib/process-lock.mjs";
+let stopping=false,workerLock;
+const stop=()=>{stopping=true;};
+for(const signal of ["SIGINT","SIGTERM"])process.on(signal,stop);
 import { telegramForUser } from "./lib/telegram.mjs";
 import { buildEventsHtml } from "./lib/events.mjs";
 import { DEFAULT_BACKGROUND, brandLookFields, downloadBackground, fileExists, renderPost } from "./lib/render.mjs";
@@ -30,6 +34,7 @@ async function pickBackground(sel, brand) {
 
 const worker = createWorkerCore({
   prisma,
+  isActive:()=>!stopping&&Boolean(workerLock?.active()),
   football: { refreshStatuses, fetchEvents, saveEvents, isFinished, isDead },
   buildEventsHtml,
   renderPost,
@@ -44,18 +49,21 @@ const worker = createWorkerCore({
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
-  // A crash while sending leaves rows in SENDING; put them back in the queue.
-  await worker.recoverStuck({ all: true });
+  workerLock=await acquireProcessLock(processLockClient("final-whistle-match-worker-v3"),{key:PROCESS_LOCKS.matchWorker,codePrefix:"MATCH_WORKER",onLost:detail=>{console.error("[Match] MATCH_WORKER_LOCK_LOST",JSON.stringify(detail));stop();}});
+  if(!workerLock){console.error("[Match] MATCH_WORKER_ALREADY_RUNNING; no second worker started.");return;}
+  // Only stale jobs are recoverable, never another worker's current send.
+  await worker.recoverStuck();
   console.log("Worker started. Checking every minute... (Ctrl+C to stop)");
 
   let lastHousekeeping = 0;
   let lastCleanup = 0;
-  while (true) {
+  while (!stopping && workerLock.active()) {
     try {
       await worker.tick();
     } catch (e) {
       console.error("[tick failed]", e.message);
     }
+    if(stopping || !workerLock.active()) break;
     try {
       if (Date.now() - lastHousekeeping > 10 * 60e3) {
         lastHousekeeping = Date.now();
@@ -73,4 +81,4 @@ async function main() {
   }
 }
 
-main();
+main().catch(()=>{console.error("[Match] MATCH_WORKER_STOPPED; check the database.");process.exitCode=1;}).finally(async()=>{stop();await workerLock?.release();await prisma.$disconnect();});

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as config from "../scripts/lib/config.mjs";
 import { buildEventsHtml } from "../scripts/lib/events.mjs";
@@ -38,6 +39,7 @@ function makeCore(extra: Record<string, unknown> = {}) {
     pickBackground: async () => ({ background_data_uri: "bg" }),
     telegramForUser: () => tg,
     unlink,
+    backgroundFs: {realpath:async(p:string)=>p,lstat:async()=>({isFile:()=>true,isSymbolicLink:()=>false})},
     localDate: (d: Date) => d.toISOString().slice(0, 10),
     config,
     now: () => clock.now,
@@ -49,7 +51,9 @@ function makeCore(extra: Record<string, unknown> = {}) {
 }
 
 function addUser(id: string, extra: Record<string, unknown> = {}) {
-  db.tables.user.push({ id, email: `${id}@x.com`, telegramChatId: `chat-${id}`, botToken: `enc-${id}`, ...extra });
+  db.tables.user.push({ id, email: `${id}@x.com`, telegramChatId: String(100+db.tables.user.length+1), botToken: `enc-${id}`, botId:`bot-${id}`, ...extra });
+  const added=db.tables.user.at(-1)!;
+  if(added.botToken&&added.telegramChatId)db.tables.matchTelegramBinding.push({userId:id,botId:added.botId,telegramUserId:added.telegramChatId,chatId:added.telegramChatId,authorizedAt:new Date(T0)});
   db.tables.brand.push({ id: `b-${id}`, userId: id, name: `Page ${id}`, templateRef: "classic", brandMode: "text", logoPath: null, backgroundPath: null, backgroundUrl: null, createdAt: 1 });
 }
 function addMatch(fixtureId: number, extra: Record<string, unknown> = {}) {
@@ -136,7 +140,7 @@ describe("worker: the normal path", () => {
     expect(renderPost).toHaveBeenCalledTimes(1);
     expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
     expect(tg.sendDocument).toHaveBeenCalledTimes(1);
-    expect(tg.sendDocument).toHaveBeenCalledWith("chat-u1", "/tmp/post.jpg", "Alpha FC 2-1 Beta FC");
+    expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Alpha FC 2-1 Beta FC");
     expect(sel("s1")).toMatchObject({ status: "COMPLETED", sentAt: new Date(T0) });
     await core.tick();
     advance(5);
@@ -495,7 +499,7 @@ describe("worker: housekeeping", () => {
     expect(tg.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("recoverStuck puts back posts stuck in SENDING for 15 minutes, all of them at start-up", async () => {
+  it("recoverStuck only recovers stale SENDING posts even when all is requested", async () => {
     finishedWithEvents(1);
     addSel("stuck", "u1", 1, { status: "SENDING", updatedAt: new Date(T0 - 20 * MIN) });
     addSel("busy", "u1", 1, { status: "SENDING", updatedAt: new Date(T0 - 2 * MIN) });
@@ -503,23 +507,85 @@ describe("worker: housekeeping", () => {
     expect(await core.recoverStuck()).toBe(1);
     expect(sel("stuck").status).toBe("SELECTED");
     expect(sel("busy").status).toBe("SENDING");
-    expect(await core.recoverStuck({ all: true })).toBe(1);
-    expect(sel("busy").status).toBe("SELECTED");
+    expect(await core.recoverStuck({ all: true })).toBe(0);
+    expect(sel("busy").status).toBe("SENDING");
   });
 
   it("cleanup removes old matches with their selections and photos, and old list and usage records", async () => {
     addMatch(1, { kickoff: new Date(T0 - 50 * 3600e3) });
     addMatch(2, { kickoff: new Date(T0 - 5 * 3600e3) });
-    addSel("old", "u1", 1, { backgroundPath: "/files/old.jpg" });
-    addSel("new", "u1", 2, { backgroundPath: "/files/new.jpg" });
+    addSel("old", "u1", 1, { backgroundPath: path.resolve("storage/backgrounds/old.jpg") });
+    addSel("new", "u1", 2, { backgroundPath: path.resolve("storage/backgrounds/new.jpg") });
     db.tables.fixtureDay.push({ date: "2026-10-01" }, { date: "2026-10-10" });
     db.tables.apiUsage.push({ day: "2026-09-01", count: 5 }, { day: "2026-10-10", count: 5 });
     await makeCore().cleanup();
     expect(db.tables.match.map((m) => m.fixtureId)).toEqual([2]);
     expect(db.tables.selection.map((s) => s.id)).toEqual(["new"]);
     expect(unlink).toHaveBeenCalledTimes(1);
-    expect(unlink).toHaveBeenCalledWith("/files/old.jpg");
+    expect(unlink).toHaveBeenCalledWith(path.resolve("storage/backgrounds/old.jpg"));
     expect(db.tables.fixtureDay.map((d) => d.date)).toEqual(["2026-10-10"]);
     expect(db.tables.apiUsage.map((d) => d.day)).toEqual(["2026-10-10"]);
   });
+});
+
+describe('worker lock-loss delivery safety',()=>{
+ it('does not send after its lease is lost during rendering',async()=>{addUser('u');finishedWithEvents(1);addSel('s','u',1);let active=true;renderPost.mockImplementationOnce(async()=>{active=false;return '/tmp/post.jpg';});const core=makeCore({isActive:()=>active});await expect(core.tick()).rejects.toMatchObject({code:'MATCH_WORKER_LOCK_LOST'});expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('s').status).toBe('SENDING');});
+});
+
+describe('H2 approved-recipient delivery gates',()=>{
+ it('holds legacy selections without rendering or sending',async()=>{
+  db.tables.matchTelegramBinding.length=0;finishedWithEvents(1);addSel('legacy','u1',1);
+  await makeCore().tick();expect(renderPost).not.toHaveBeenCalled();expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('legacy').status).toBe('SELECTED');
+ });
+ it('blocks revocation during rendering without consuming delivery attempts',async()=>{
+  finishedWithEvents(1);addSel('revoked','u1',1);renderPost.mockImplementationOnce(async()=>{db.tables.matchTelegramBinding.length=0;return '/tmp/post.jpg';});
+  await makeCore().tick();expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('revoked')).toMatchObject({status:'SELECTED',attempts:0});
+ });
+ it('blocks a stale connection changed during rendering',async()=>{
+  finishedWithEvents(1);addSel('stale','u1',1);renderPost.mockImplementationOnce(async()=>{db.tables.user[0].botToken='changed-token';return '/tmp/post.jpg';});
+  await makeCore().tick();expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('stale').attempts).toBe(0);
+ });
+ it('uses the approved recipient rather than the legacy chat field',async()=>{
+  db.tables.user[0].telegramChatId='999';finishedWithEvents(1);addSel('recipient','u1',1);await makeCore().tick();expect(tg.sendDocument.mock.calls[0][0]).toBe('101');
+ });
+ it('preserves pending unpaired selections and files during expiry and cleanup',async()=>{
+  db.tables.matchTelegramBinding.length=0;addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('held','u1',1,{backgroundPath:'/files/held.jpg'});
+  const core=makeCore();await core.expireOld();await core.cleanup();expect(sel('held').status).toBe('SELECTED');expect(db.tables.match).toHaveLength(1);expect(unlink).not.toHaveBeenCalled();expect(tg.sendMessage).not.toHaveBeenCalled();
+ });
+});
+
+describe('reference-safe match retention',()=>{
+  it('retains a shared background until its last retained selection is gone',async()=>{
+    const file=path.resolve('storage/backgrounds/shared.jpg');
+    addMatch(1,{kickoff:new Date(T0-50*3600e3)});addMatch(2);addSel('old','u1',1,{backgroundPath:file});addSel('new','u1',2,{backgroundPath:file});
+    await makeCore().cleanup();expect(unlink).not.toHaveBeenCalled();expect(db.tables.selection.map(s=>s.id)).toEqual(['new']);
+    clock.now+=50*3600e3;await makeCore().cleanup();expect(unlink).toHaveBeenCalledExactlyOnceWith(file);
+  });
+  it('removes duplicate orphan paths once, only after deleting old database references',async()=>{
+    const file=path.resolve('storage/backgrounds/shared-old.jpg');addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('a','u1',1,{backgroundPath:file});addSel('b','u1',1,{backgroundPath:file});
+    unlink.mockImplementation(async()=>{expect(db.tables.selection).toHaveLength(0);});await makeCore().cleanup();expect(unlink).toHaveBeenCalledExactlyOnceWith(file);
+  });
+  it('never unlinks an outside path in an expired record',async()=>{
+    addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('unsafe','u1',1,{backgroundPath:path.resolve('storage/backgrounds/../../keep.env')});
+    await makeCore().cleanup();expect(db.tables.match).toHaveLength(0);expect(unlink).not.toHaveBeenCalled();
+  });
+  it('keeps files and records intact when deleting old matches fails',async()=>{
+    addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('old','u1',1,{backgroundPath:path.resolve('storage/backgrounds/keep.jpg')});
+    db.failNext('match','deleteMany',new Error('database unavailable'));await expect(makeCore().cleanup()).rejects.toThrow('database unavailable');expect(unlink).not.toHaveBeenCalled();expect(db.tables.selection).toHaveLength(1);
+  });
+  it('retires valid expired UTC and legacy date keys only, preserving the cutoff and unrelated keys',async()=>{
+    const expired=['utc:2026-10-01|39,78','utc:2026-10-06|39','2026-10-01'];
+    const kept=['utc:2026-10-07|39,78','utc:2026-10-10|39','2026-10-07','2026-10-10','!unrelated','utc:2026-10-01|not-a-league','utc:2026-02-31|39','2026-10-01-notes'];
+    db.tables.fixtureDay.push(...[...expired,...kept].map(date=>({date})));await makeCore().cleanup();expect(db.tables.fixtureDay.map(x=>x.date)).toEqual(kept);
+  });
+});
+
+describe('retiring only disposable worker state',()=>{
+ it('keeps active cooldowns but retires an inactive key after its cooldown ends',()=>{
+  const b=createBackoff({baseMs:1000,maxMs:5000});b.fail('live',0);b.fail('inactive',0);b.retire(new Set(['live']),999);expect(b.fail('inactive',999)).toBe(2000);b.retire(new Set(['live']),3000);expect(b.fail('inactive',3000)).toBe(1000);expect(b.fail('live',3000)).toBe(2000);
+ });
+ it('retires unused event counters without expiring delivered-but-unsaved acknowledgements',async()=>{
+  addMatch(1);addSel('live','u1',1);const core=makeCore();core._state.emptyEvents.set(1,2);core._state.emptyEvents.set(999,2);core._state.deliveredButUnsaved.set('protected',T0-100*3600e3);
+  await core.cleanup();expect([...core._state.emptyEvents]).toEqual([[1,2]]);expect(core._state.deliveredButUnsaved.has('protected')).toBe(true);
+ });
 });

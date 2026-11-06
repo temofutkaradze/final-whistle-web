@@ -78,19 +78,19 @@ describe("addresses and settings", () => {
 
 describe("parseProfile: only a verified email gets in", () => {
   it("accepts a verified email, lower-cased, with a trimmed name", () => {
-    expect(parseProfile({ email: "  Demo@Example.COM ", email_verified: true, name: "  Demo User " })).toEqual({ email: "demo@example.com", name: "Demo User" });
-    expect(parseProfile({ email: "a@b.co", email_verified: "true" })).toEqual({ email: "a@b.co", name: null });
+    expect(parseProfile({ sub: "google-subject", email: "  Demo@Example.COM ", email_verified: true, name: "  Demo User " })).toEqual({ subject: "google-subject", email: "demo@example.com", name: "Demo User" });
+    expect(parseProfile({ sub: "google-subject", email: "a@b.co", email_verified: "true" })).toEqual({ subject: "google-subject", email: "a@b.co", name: null });
   });
 
   it("refuses everything else", () => {
-    for (const bad of [null, undefined, "x", 5, [], {}, { email: "a@b.co" }, { email: "a@b.co", email_verified: false }, { email: "a@b.co", email_verified: "false" }, { email: "a@b.co", email_verified: 1 }, { email_verified: true }, { email: "no-at-sign", email_verified: true }, { email: 42, email_verified: true }, { email: "a".repeat(250) + "@b.co", email_verified: true }]) {
+    for (const bad of [null, undefined, "x", 5, [], {}, { sub: "google-subject", email: "a@b.co" }, { sub: "google-subject", email: "a@b.co", email_verified: false }, { sub: "google-subject", email: "a@b.co", email_verified: "false" }, { sub: "google-subject", email: "a@b.co", email_verified: 1 }, { sub: "google-subject", email_verified: true }, { sub: "google-subject", email: "no-at-sign", email_verified: true }, { sub: "google-subject", email: 42, email_verified: true }, { sub: "google-subject", email: "a".repeat(250) + "@b.co", email_verified: true }]) {
       expect(parseProfile(bad), JSON.stringify(bad)).toBeNull();
     }
   });
 
   it("shortens a very long name and ignores an empty one", () => {
-    expect(parseProfile({ email: "a@b.co", email_verified: true, name: "x".repeat(500) })?.name?.length).toBe(120);
-    expect(parseProfile({ email: "a@b.co", email_verified: true, name: "   " })?.name).toBeNull();
+    expect(parseProfile({ sub: "google-subject", email: "a@b.co", email_verified: true, name: "x".repeat(500) })?.name?.length).toBe(120);
+    expect(parseProfile({ sub: "google-subject", email: "a@b.co", email_verified: true, name: "   " })?.name).toBeNull();
   });
 });
 
@@ -102,10 +102,10 @@ describe("exchangeCodeForProfile", () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const fake = (async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
-      return url === GOOGLE_TOKEN_URL ? reply({ access_token: "tok" }) : reply({ email: "Me@Example.com", email_verified: true, name: "Me" });
+      return url === GOOGLE_TOKEN_URL ? reply({ access_token: "tok" }) : reply({ sub: "google-subject", email: "Me@Example.com", email_verified: true, name: "Me" });
     }) as unknown as typeof fetch;
 
-    expect(await exchangeCodeForProfile(args, fake)).toEqual({ email: "me@example.com", name: "Me" });
+    expect(await exchangeCodeForProfile(args, fake)).toEqual({ subject: "google-subject", email: "me@example.com", name: "Me" });
     expect(calls.map((c) => c.url)).toEqual([GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL]);
     const body = new URLSearchParams(String(calls[0].init?.body));
     expect(Object.fromEntries(body)).toEqual({ code: "the-code", client_id: "id", client_secret: "secret", redirect_uri: args.redirectUri, grant_type: "authorization_code", code_verifier: "the-verifier" });
@@ -114,7 +114,7 @@ describe("exchangeCodeForProfile", () => {
   });
 
   it("fails clearly when Google refuses the code, sends no token, or answers with junk", async () => {
-    const make = (tokenRes: () => Promise<Response>) => (async (url: string) => (url === GOOGLE_TOKEN_URL ? tokenRes() : reply({ email: "a@b.co", email_verified: true }))) as unknown as typeof fetch;
+    const make = (tokenRes: () => Promise<Response>) => (async (url: string) => (url === GOOGLE_TOKEN_URL ? tokenRes() : reply({ sub: "google-subject", email: "a@b.co", email_verified: true }))) as unknown as typeof fetch;
     await expect(exchangeCodeForProfile(args, make(() => reply({ error: "invalid_grant" }, 400)))).rejects.toThrow(/token request failed \(400\)/);
     await expect(exchangeCodeForProfile(args, make(() => reply({})))).rejects.toThrow(/token request failed/);
     await expect(exchangeCodeForProfile(args, make(() => Promise.resolve(new Response("<html>oops</html>", { status: 200 }))))).rejects.toThrow(/token request failed/);
@@ -123,7 +123,7 @@ describe("exchangeCodeForProfile", () => {
   it("fails when the userinfo answer is an error or the email is not verified", async () => {
     const withInfo = (info: () => Promise<Response>) => (async (url: string) => (url === GOOGLE_TOKEN_URL ? reply({ access_token: "t" }) : info())) as unknown as typeof fetch;
     await expect(exchangeCodeForProfile(args, withInfo(() => reply({}, 401)))).rejects.toThrow(/userinfo request failed \(401\)/);
-    await expect(exchangeCodeForProfile(args, withInfo(() => reply({ email: "a@b.co", email_verified: false })))).rejects.toThrow(/verified email/);
+    await expect(exchangeCodeForProfile(args, withInfo(() => reply({ sub: "google-subject", email: "a@b.co", email_verified: false })))).rejects.toThrow(/verified email/);
     await expect(exchangeCodeForProfile(args, withInfo(() => Promise.resolve(new Response("not json"))))).rejects.toThrow(/verified email/);
   });
 
@@ -133,4 +133,13 @@ describe("exchangeCodeForProfile", () => {
     }) as unknown as typeof fetch;
     await expect(exchangeCodeForProfile(args, down)).rejects.toThrow("network down");
   });
+});
+
+describe('verified provider subjects',()=>{
+ it('requires a bounded opaque subject and never normalizes its identity',()=>{
+  const valid={email:'owner@example.com',email_verified:true};
+  for(const sub of [undefined,null,5,'',' ',' id','id ','a\nb','x'.repeat(256)])expect(parseProfile({...valid,sub})).toBeNull();
+  expect(parseProfile({...valid,sub:'CaseSensitive-ID'})?.subject).toBe('CaseSensitive-ID');
+  expect(parseProfile({...valid,sub:'other-ID',email_verified:false})).toBeNull();
+ });
 });

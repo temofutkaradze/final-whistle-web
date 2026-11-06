@@ -1,5 +1,8 @@
+import {approvedMatchUser} from './match-pairing.mjs';
+import {deleteUnusedBackground} from './background-files.mjs';
+import {realpath,lstat} from 'node:fs/promises';
 // The brain of the worker (scripts/worker.mjs): finds finished matches, builds the post for every customer who picked the
-// match and sends it to their Telegram chat. It has no imports and no side effects: everything it talks to (database,
+// match and sends it to their approved Telegram chat. Its external dependencies (database,
 // match data, render server, Telegram, the clock) is handed in, so tests can replace all of it.
 //
 // Rules (same as the n8n workflow it replaced):
@@ -55,6 +58,9 @@ export function createBackoff({ baseMs, maxMs }) {
     ok(key) {
       state.delete(key);
     },
+    retire(liveKeys, now) {
+      for(const [key,entry] of state)if(!liveKeys.has(key)&&now>=entry.until)state.delete(key);
+    },
   };
 }
 
@@ -74,7 +80,10 @@ export function createWorkerCore(deps) {
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
     log = console.log,
     error = console.error,
+    isActive = () => true,
   } = deps;
+  const assertActive=()=>{if(!isActive())throw Object.assign(new Error("MATCH_WORKER_LOCK_LOST"),{code:"MATCH_WORKER_LOCK_LOST"});};
+  const activeClaims=new Set();
   const { isFinished, isDead } = football;
   const EMPTY_EVENTS_TRIES = deps.emptyEventsTries ?? 3;
 
@@ -86,8 +95,10 @@ export function createWorkerCore(deps) {
 
   // Sends a plain message to the customer through THEIR bot; never lets a Telegram error stop the worker.
   async function notify(user, text) {
+    assertActive();
     try {
-      await telegramForUser(user).sendMessage(user.telegramChatId, text);
+      const approved=await approvedMatchUser(prisma,user.id,{botId:user.botId,connectionToken:user.botToken,identity:{chatId:user.telegramChatId,telegramUserId:user.telegramChatId}});
+      if(approved)await telegramForUser(approved).sendMessage(approved.telegramChatId, text);
     } catch (e) {
       error("notify failed:", e.message);
     }
@@ -103,6 +114,9 @@ export function createWorkerCore(deps) {
   }
 
   async function sendOne(sel, match, eventsHtml) {
+    assertActive();
+    const scope={botId:sel.user.botId,connectionToken:sel.user.botToken,identity:{chatId:sel.user.telegramChatId,telegramUserId:sel.user.telegramChatId}};
+    if(!await approvedMatchUser(prisma,sel.user.id,scope))throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
     const brand = sel.user.brands[0];
     const jpg = await renderPost({
       fixture_id: `${match.fixtureId}_${sel.id}`, // unique per customer, so files never collide
@@ -118,7 +132,10 @@ export function createWorkerCore(deps) {
       away_score: match.awayScore,
       ...eventsHtml,
     });
-    await telegramForUser(sel.user).sendDocument(sel.user.telegramChatId, jpg, `${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+    assertActive();
+    const approved=await approvedMatchUser(prisma,sel.user.id,scope);
+    if(!approved)throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
+    await telegramForUser(approved).sendDocument(approved.telegramChatId, jpg, `${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
   }
 
   // The post is out; record it. A few quick retries, because a sleeping database often answers the second time.
@@ -150,17 +167,25 @@ export function createWorkerCore(deps) {
   }
 
   async function tick() {
+    assertActive();
     const t = now();
     await savePendingCompletions();
 
-    const sels = await prisma.selection.findMany({
+    const candidates = await prisma.selection.findMany({
       where: {
         status: "SELECTED",
-        user: { telegramChatId: { not: null }, botToken: { not: null } },
+        user: { botToken: { not: null } },
         match: { kickoff: { gte: new Date(t - hours(config.MAX_AGE_HOURS)), lte: new Date(t - minutes(config.DELAY_MINUTES)) } },
       },
       include: { match: true, user: { include: { brands: { orderBy: { createdAt: "desc" }, take: 1 } } } },
     });
+    const sels=[];
+    const authorized=new Map();
+    for(const sel of candidates){
+      if(!authorized.has(sel.user.id))authorized.set(sel.user.id,await approvedMatchUser(prisma,sel.user.id));
+      const approved=authorized.get(sel.user.id);
+      if(approved)sels.push({...sel,user:{...sel.user,...approved}});
+    }
     if (!sels.length) return;
 
     // 1) Status check, once per day list, only if some match is due for a look.
@@ -229,9 +254,11 @@ export function createWorkerCore(deps) {
       if (sel.attempts > 0 && t - sel.updatedAt.getTime() < minutes(config.RETRY_DELAY_MIN)) continue;
       if (!sendBackoff.ready(sel.id, t)) continue;
 
+      assertActive();
       const claimed = await prisma.selection.updateMany({ where: { id: sel.id, status: "SELECTED" }, data: { status: "SENDING" } });
       if (claimed.count === 0) continue;
 
+      activeClaims.add(sel.id);
       let delivered = false;
       try {
         if (!htmlCache.has(match.fixtureId)) {
@@ -251,7 +278,11 @@ export function createWorkerCore(deps) {
         if (!(await markCompleted(sel))) deliveredButUnsaved.set(sel.id, t);
         log(`[sent] ${match.homeTeam} - ${match.awayTeam} -> ${sel.user.email}`);
       } catch (e) {
+        if (!isActive()) throw e;
         if (delivered) continue; // cannot happen (markCompleted does not throw); kept so a post is never repeated
+        if(e?.code==='MATCH_PAIRING_REQUIRED'){
+          await prisma.selection.update({where:{id:sel.id},data:{status:'SELECTED'}});continue;
+        }
         const label = `${match.homeTeam} - ${match.awayTeam} -> ${sel.user.email}`;
         if (classifyError(e) === "transient") {
           // Nobody's fault: the attempt does not count. Wait and try again (the 24 h limit ends it for good).
@@ -268,34 +299,35 @@ export function createWorkerCore(deps) {
           data: { status: failed ? "FAILED" : "SELECTED", attempts, lastError: String(e.message).slice(0, 500) },
         });
         if (failed) await notify(sel.user, `Sorry, the post for ${match.homeTeam} - ${match.awayTeam} could not be created.`);
-      }
+      } finally { activeClaims.delete(sel.id); }
     }
   }
 
   // Posts whose 24 hours are over without a result: close them and tell the customer (instead of waiting silently).
   async function expireOld() {
+    assertActive();
     const t = now();
     const old = await prisma.selection.findMany({
       where: {
         status: "SELECTED",
         match: { kickoff: { lt: new Date(t - hours(config.MAX_AGE_HOURS)) } },
-        user: { telegramChatId: { not: null }, botToken: { not: null } },
+        user: { botToken: { not: null } },
       },
       include: { match: true, user: true },
     });
     for (const sel of old) {
+      assertActive();
+      if(!await approvedMatchUser(prisma,sel.user.id))continue;
       await prisma.selection.update({ where: { id: sel.id }, data: { status: "FAILED", lastError: `gave up after ${config.MAX_AGE_HOURS} h without a result` } });
       await notify(sel.user, `We could not get the final result of ${sel.match.homeTeam} - ${sel.match.awayTeam} in time, so there is no post.`);
     }
     if (old.length) log(`[expired] ${old.length} posts closed after ${config.MAX_AGE_HOURS} h`);
   }
 
-  // Rows left in SENDING (crash, database down in the middle) go back to the queue. At start-up all of them;
-  // while running only those untouched for 15 minutes (a send takes seconds).
+  // Recover only stale SENDING rows, including at startup. Never recover a current or known-delivered claim.
   async function recoverStuck({ all = false } = {}) {
-    const where = all
-      ? { status: "SENDING" }
-      : { status: "SENDING", updatedAt: { lt: new Date(now() - minutes(15)) }, id: { notIn: [...deliveredButUnsaved.keys()] } };
+    assertActive();
+    const where = { status: "SENDING", updatedAt: { lt: new Date(now() - minutes(15)) }, id: { notIn: [...deliveredButUnsaved.keys(),...activeClaims] } };
     const r = await prisma.selection.updateMany({ where, data: { status: "SELECTED" } });
     if (r.count) log(`[recovered] ${r.count} posts put back in the queue`);
     return r.count;
@@ -303,6 +335,7 @@ export function createWorkerCore(deps) {
 
   // Daily housekeeping: the shared match table does not grow forever.
   async function cleanup() {
+    assertActive();
     const t = now();
     const old = await prisma.match.findMany({
       where: { kickoff: { lt: new Date(t - hours(config.CLEANUP_AFTER_HOURS)) } },
@@ -310,14 +343,44 @@ export function createWorkerCore(deps) {
     });
     if (old.length) {
       const ids = old.map((m) => m.fixtureId);
-      const sels = await prisma.selection.findMany({ where: { fixtureId: { in: ids } }, select: { backgroundPath: true } });
-      for (const s of sels) if (s.backgroundPath) await unlink(s.backgroundPath).catch(() => {});
-      await prisma.match.deleteMany({ where: { fixtureId: { in: ids } } }); // selections go with them
-      log(`[cleanup] removed ${old.length} old matches`);
+      const sels = await prisma.selection.findMany({ where: { fixtureId: { in: ids } }, select: { backgroundPath: true, fixtureId: true, userId: true, status: true } });
+      const held=new Set();
+      const approvals=new Map();
+      for(const s of sels)if(['SELECTED','SENDING'].includes(s.status)){
+        if(!approvals.has(s.userId))approvals.set(s.userId,await approvedMatchUser(prisma,s.userId));
+        if(!approvals.get(s.userId))held.add(s.fixtureId);
+      }
+      const removable=ids.filter(id=>!held.has(id));
+      await prisma.match.deleteMany({ where: { fixtureId: { in: removable } } }); // selections go with them
+      const paths = new Set(sels.filter(s => !held.has(s.fixtureId) && s.backgroundPath).map(s => s.backgroundPath));
+      for (const file of paths) {
+        assertActive();
+        try { await deleteUnusedBackground(prisma,file,{realpath,lstat,...deps.backgroundFs,unlink}); }
+        catch (e) { error("[cleanup] background retained:", e.message); }
+      }
+      log(`[cleanup] removed ${removable.length} old matches`);
     }
     const cutoffDay = localDate(new Date(t - hours(72)));
-    await prisma.fixtureDay.deleteMany({ where: { date: { lt: cutoffDay } } });
+    const days = await prisma.fixtureDay.findMany({
+      where: { OR: [{date:{lt:cutoffDay}}, {date:{gte:'utc:',lt:'utc:'+cutoffDay}}] }, select:{date:true},
+    });
+    const expired = days.filter(({date}) => {
+      const parsed = /^(?:([0-9]{4}-[0-9]{2}-[0-9]{2})|utc:([0-9]{4}-[0-9]{2}-[0-9]{2})\|[0-9]+(?:,[0-9]+)*)$/.exec(date);
+      const day = parsed?.[1] ?? parsed?.[2];
+      if (!day || day >= cutoffDay) return false;
+      const value = new Date(day+'T00:00:00.000Z');
+      return Number.isFinite(value.getTime()) && value.toISOString().slice(0,10) === day;
+    }).map(({date}) => date);
+    if (expired.length) await prisma.fixtureDay.deleteMany({where:{date:{in:expired}}});
     await prisma.apiUsage.deleteMany({ where: { day: { lt: new Date(t - hours(24 * 7)).toISOString().slice(0, 10) } } });
+    const pending=await prisma.selection.findMany({where:{status:{in:['SELECTED','SENDING']}},select:{id:true,fixtureId:true}});
+    const liveIds=new Set(pending.map(s=>s.fixtureId));
+    const tracked=await prisma.match.findMany({where:{fixtureId:{in:[...liveIds]}},select:{day:true}});
+    statusBackoff.retire(new Set(tracked.map(m=>m.day)),t);
+    eventsBackoff.retire(new Set([...liveIds].map(String)),t);
+    sendBackoff.retire(new Set(pending.map(s=>s.id)),t);
+    for(const id of emptyEvents.keys())if(!liveIds.has(id))emptyEvents.delete(id);
+    // deliveredButUnsaved and activeClaims are safety state, not disposable caches. Never expire them here.
   }
 
   return { tick, expireOld, recoverStuck, cleanup, notify, _state: { deliveredButUnsaved, emptyEvents } };

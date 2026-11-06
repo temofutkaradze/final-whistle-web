@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ThemeToggle from "./theme-toggle";
 import SubmitButton from "./submit-button";
 import { logout } from "@/lib/auth-actions";
@@ -14,6 +14,8 @@ type HeaderProps = {
 
 export default function Header({ user }: HeaderProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+  const menuToggleRef = useRef<HTMLButtonElement>(null);
   const pathname = usePathname();
   const isHome = pathname === "/";
   const isDashboard = pathname === "/dashboard";
@@ -24,14 +26,24 @@ export default function Header({ user }: HeaderProps) {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setMobileOpen(false);
+      if (e.key === "Escape" && mobileOpen) {
+        setMobileOpen(false);
+        menuToggleRef.current?.focus();
+      }
+    }
+    function onFocusIn(e: FocusEvent) {
+      if (mobileOpen && e.target instanceof Node && !headerRef.current?.contains(e.target)) setMobileOpen(false);
     }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    window.addEventListener("focusin", onFocusIn);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("focusin", onFocusIn);
+    };
+  }, [mobileOpen]);
 
   return (
-    <header className="landing-header" role="banner">
+    <header ref={headerRef} className="landing-header" role="banner">
       <div className="landing-header-inner container">
         <Link href="/" className="landing-brand" aria-label={`${SITE.name} home`}>
           <span className="landing-brand-dot" aria-hidden="true" />
@@ -84,6 +96,7 @@ export default function Header({ user }: HeaderProps) {
           <button
             type="button"
             className="mobile-nav-toggle"
+            ref={menuToggleRef}
             aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
             aria-expanded={mobileOpen}
             aria-controls="mobile-nav-menu"
@@ -109,7 +122,7 @@ export default function Header({ user }: HeaderProps) {
         <>
           <div
             className="mobile-nav-backdrop"
-            onClick={() => setMobileOpen(false)}
+            onClick={() => { setMobileOpen(false); menuToggleRef.current?.focus(); }}
             aria-hidden="true"
           />
           <nav id="mobile-nav-menu" className="mobile-nav-menu" aria-label="Mobile navigation">

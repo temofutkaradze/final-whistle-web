@@ -1,8 +1,9 @@
+import { authAdmission } from "@/lib/admission";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { createSession, getCurrentUser } from "@/lib/auth";
-import { MAX_PASSWORD, MIN_PASSWORD, hashPassword } from "@/lib/password";
+import { MAX_EMAIL, MAX_PASSWORD, MIN_PASSWORD, hashPassword } from "@/lib/password";
 import GoogleButton from "@/app/google-button";
 import SubmitButton from "@/app/submit-button";
 
@@ -13,12 +14,17 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 async function createAccount(formData: FormData) {
   "use server";
 
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const rawEmail=formData.get("email");
+  if(typeof rawEmail!=='string'||rawEmail.length>MAX_EMAIL)redirect('/signup?error=email');
+  const email = rawEmail.trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
 
-  if (!EMAIL_RE.test(email)) redirect("/signup?error=email");
+  if (email.length > MAX_EMAIL || !EMAIL_RE.test(email)) redirect("/signup?error=email");
   if (password.length < MIN_PASSWORD || password.length > MAX_PASSWORD) redirect("/signup?error=password");
 
+  const release=authAdmission.acquire(email);
+  if(!release)redirect("/signup?error=wait");
+  try {
   // An existing email is never taken over: nobody has proved that the email is theirs yet.
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) redirect(existing.passwordHash ? "/signup?error=exists" : "/signup?error=legacy");
@@ -30,13 +36,15 @@ async function createAccount(formData: FormData) {
 
   await createSession(user.id);
   redirect("/dashboard");
+  } finally { release(); }
 }
 
 const ERRORS: Record<string, string> = {
+  wait: "Too many attempts. Please try again later.",
   email: "Please enter a valid email address.",
   password: `The password must be ${MIN_PASSWORD}-${MAX_PASSWORD} characters long.`,
   exists: "An account with this email already exists. Please log in.",
-  legacy: "This email belongs to an old test account without a password. Use Continue with Google with the same email, or another email.",
+  legacy: "An account with this email already exists. Use your existing sign-in method or contact support.",
 };
 
 export default async function SignUp({
@@ -68,6 +76,8 @@ export default async function SignUp({
                 type="email"
                 required
                 autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
                 aria-invalid={error === "email" || error === "exists" || error === "legacy"}
                 aria-describedby={error && ERRORS[error] && error !== "password" ? "signup-error" : undefined}
               />

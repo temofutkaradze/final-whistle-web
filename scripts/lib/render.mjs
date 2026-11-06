@@ -1,5 +1,6 @@
 import { mkdir, writeFile, access, readFile } from "node:fs/promises";
 import path from "node:path";
+import {downloadPublicResource,renderHeaders} from "../../render/security.js";
 
 const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://127.0.0.1:4500/render";
 
@@ -59,29 +60,12 @@ export async function fileExists(p) {
 
 // Demo-level safe download of a background from a URL (http(s) only, no local hosts, images only).
 export async function downloadBackground(brandId, url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (!/^https?:$/.test(parsed.protocol)) return null;
-  const host = parsed.hostname.toLowerCase();
-  if (
-    host === "localhost" ||
-    host.endsWith(".local") ||
-    /^(127\.|10\.|0\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) ||
-    host === "[::1]"
-  ) {
-    return null;
-  }
-  const res = await fetch(parsed, { signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`Background download failed: HTTP ${res.status}`);
-  const type = (res.headers.get("content-type") ?? "").toLowerCase();
-  const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : type.includes("jpeg") || type.includes("jpg") ? "jpg" : null;
-  if (!ext) throw new Error("Background must be a PNG, JPEG or WebP image.");
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > 15 * 1024 * 1024) throw new Error("Background image is larger than 15 MB.");
+  if(!/^[A-Za-z0-9_-]{1,128}$/.test(brandId))throw new Error("Invalid background ID");
+  const resource=await downloadPublicResource(url,{maxBytes:15*1024*1024,timeoutMs:15000});
+  const type=resource.contentType;
+  const ext=type.includes('png')?'png':type.includes('webp')?'webp':type.includes('jpeg')||type.includes('jpg')?'jpg':null;
+  if(!ext)throw new Error('Background must be a PNG, JPEG or WebP image.');
+  const buf=resource.body;
   await mkdir(BACKGROUND_DIR, { recursive: true });
   const file = path.join(BACKGROUND_DIR, `${brandId}.${ext}`);
   await writeFile(file, buf);
@@ -91,11 +75,12 @@ export async function downloadBackground(brandId, url) {
 export async function renderPost(payload) {
   const res = await fetch(RENDER_URL, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: renderHeaders(),
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(120000),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.jpg_path) throw new Error(data.error ?? `Render server answered with HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`Render server answered with HTTP ${res.status}`);
+  if (!data.jpg_path) throw new Error(data.error ?? "Render server returned no JPG");
   return data.jpg_path;
 }

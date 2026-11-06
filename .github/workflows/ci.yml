@@ -26,6 +26,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install Chromium for News renderer integration tests
+        run: npx --no-install playwright install --with-deps chromium
       - name: Types (site and tests)
         run: npm run typecheck
       - name: Tests

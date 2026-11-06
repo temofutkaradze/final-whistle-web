@@ -44,6 +44,7 @@ declare module "*/scripts/lib/worker-core.mjs" {
     fail(key: string, now: number): number;
     wait(key: string, now: number, ms: number): void;
     ok(key: string): void;
+    retire(keys:Set<string>,now:number): void;
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export function createWorkerCore(deps: any): {
@@ -64,7 +65,7 @@ declare module "*/scripts/lib/selection.mjs" {
 }
 
 declare module "*/scripts/lib/poller.mjs" {
-  export function shouldRestart(entry: { failed?: boolean; retryAt?: number } | undefined, now: number): boolean;
+  export function shouldRestart(entry: { failed?: boolean; retryAt?: number; blocked?: boolean } | undefined, now: number): boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export function runPoller(entry: any, deps: any): Promise<void>;
 }
@@ -76,4 +77,21 @@ declare module "*/next.config.mjs" {
     headers: () => Promise<{ source: string; headers: { key: string; value: string }[] }[]>;
   };
   export default config;
+}
+
+declare module "*/scripts/lib/background-files.mjs" {
+  export function withBackgroundFile<T>(db: any, file: string, work: (tx: any, resolved: string) => Promise<T>): Promise<T>;
+  export function assignPendingBackground(db: any, userId: string, file: string, fixtureId: number | "all"): Promise<{count:number}>;
+  export function deleteUnusedBackground(db: any, file: string, io?: any): Promise<boolean>;
+}
+
+declare module "*/scripts/lib/telegram.mjs" {
+ export const MAX_TELEGRAM_IMAGE:number;
+ export function readTelegramImage(response:Response,limit?:number):Promise<Buffer>;
+ export function makeTelegram(token:string):any;
+ export function telegramForUser(user:any):any;
+}
+declare module "*/scripts/lib/idle-cache.mjs" {
+ export function createIdleCache(options?:{max?:number;ttlMs?:number;now?:()=>number}):{get(key:string):any;set(key:string,value:any):void;readonly size:number;prune():void};
+ export function retireCooldowns(entries:Map<string,number>,wanted:Map<string,unknown>,now?:number):void;
 }

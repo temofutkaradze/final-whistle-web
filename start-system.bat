@@ -13,6 +13,9 @@ timeout /t 2 /nobreak >nul
 
 wt -w 0 new-tab --title "Worker" --suppressApplicationTitle -d "C:\final-whistle-web" cmd /k "npm run worker"
 
+timeout /t 2 /nobreak >nul
+wt -w 0 new-tab --title "News Bot" --suppressApplicationTitle -d "C:\final-whistle-web" cmd /k "npm run news:bot"
+
 rem Only if you still run your old n8n workflow, remove the "rem " in front of the next two blocks:
 rem timeout /t 2 /nobreak >nul
 rem wt -w 0 new-tab --title "ngrok" --suppressApplicationTitle cmd /k "ngrok http --url=valiant-chase-unripe.ngrok-free.dev 5678"

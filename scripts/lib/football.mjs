@@ -195,11 +195,5 @@ export async function saveEvents(fixtureId, events) {
   });
 }
 
-export async function fetchEventsOnce(fixtureId) {
-  const events = await fetchEvents(fixtureId);
-  await saveEvents(fixtureId, events);
-  return events;
-}
-
 export const isFinished = (status) => FINISHED.has(status);
 export const isDead = (status) => DEAD.has(status);

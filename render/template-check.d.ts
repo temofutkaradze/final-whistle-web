@@ -3,3 +3,5 @@ export const KNOWN_PLACEHOLDERS: string[];
 export const REQUIRED: string[];
 export function checkTemplateHtml(html: unknown): { ok: boolean; errors: string[]; warnings: string[] };
 export function withCsp(html: string): string;
+
+export function collectUrls(html: string): string[];

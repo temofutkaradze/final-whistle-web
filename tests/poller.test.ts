@@ -23,7 +23,7 @@ const ok = (result: unknown = true) => ({ ok: true, result });
 const ME = { ok: true, result: { username: "demo_bot" } };
 
 function setup(script: Record<string, Reply[]>, opts: { stopAfterGetUpdates?: number; handle?: (...a: unknown[]) => unknown } = {}) {
-  const { tg, calls } = scriptedTelegram(script, { getMe: ME, deleteWebhook: ok(), setMyCommands: ok(), getUpdates: { ok: true, result: [] } });
+  const { tg, calls } = scriptedTelegram(script, { getMe: ME, getWebhookInfo: ok({url:""}), setMyCommands: ok(), getUpdates: { ok: true, result: [] } });
   const entry: Record<string, any> = { stop: false, failed: false, tg, label: "demo@x.com", ctx: { tg, ownerId: "u1" }, lastFailure: null };
   const sleeps: number[] = [];
   const logs: string[] = [];
@@ -57,10 +57,10 @@ describe("shouldRestart", () => {
 });
 
 describe("runPoller: starting", () => {
-  it("checks the bot, removes a webhook, sets the commands and starts listening", async () => {
+  it("checks the bot and webhook without modifying it, sets commands and starts listening", async () => {
     const s = setup({ getUpdates: [{ ok: true, result: [] }] }, { stopAfterGetUpdates: 1 });
     await s.run();
-    expect(s.calls.map((c) => c.method).filter((m) => m !== "getUpdates")).toEqual(["getMe", "deleteWebhook", "setMyCommands"]);
+    expect(s.calls.map((c) => c.method).filter((m) => m !== "getUpdates")).toEqual(["getMe", "getWebhookInfo", "setMyCommands"]);
     expect(s.calls.some((c) => c.method === "getUpdates")).toBe(true);
     expect(s.logs[0]).toContain("@demo_bot is running");
     expect(s.entry.failed).toBe(false);
@@ -85,8 +85,8 @@ describe("runPoller: starting", () => {
     expect(s.errors[0]).toContain("cannot reach Telegram");
   });
 
-  it("an error while removing the webhook or setting the commands is handled the same way", async () => {
-    const s = setup({ deleteWebhook: [new Error("socket hang up")] });
+  it("an error while inspecting the webhook is handled safely", async () => {
+    const s = setup({ getWebhookInfo: [new Error("socket hang up")] });
     await s.run();
     expect(s.entry.failed).toBe(true);
   });
@@ -137,10 +137,12 @@ describe("runPoller: Telegram answers with an error", () => {
     expect(s.entry).toMatchObject({ failed: true, retryAt: 1_000_000 + 5 * 60_000 });
   });
 
-  it("other errors: wait 5 seconds and go on; 409 explains the likely cause", async () => {
+  it("a polling conflict stops and blocks automatic restart", async () => {
     const s = setup({ getUpdates: [{ ok: false, error_code: 409, description: "Conflict: terminated by other getUpdates request" }, { ok: true, result: [] }] }, { stopAfterGetUpdates: 2 });
     await s.run();
-    expect(s.sleeps).toEqual([5000]);
+    expect(s.sleeps).toEqual([]);
+    expect(s.entry.blocked).toBe(true);
+    expect(shouldRestart(s.entry,Infinity)).toBe(false);
     expect(s.errors.join("\n")).toContain("another poller");
   });
 });
@@ -181,4 +183,10 @@ describe("runPoller: messages", () => {
     await expect(s.run()).resolves.toBeUndefined();
     expect(s.logs.at(-1)).toContain("bot stopped");
   });
+});
+
+describe('runPoller: Stage 1 safety',()=>{
+ it('never deletes an existing webhook or begins polling it',async()=>{const s=setup({getWebhookInfo:[ok({url:'https://example.com/hook'})]});await s.run();expect(s.entry.blocked).toBe(true);expect(s.calls.map(c=>c.method)).toEqual(['getMe','getWebhookInfo']);});
+ it('checks cursor persistence before handling and skips duplicate updates',async()=>{const handle=vi.fn(async()=>{});const u={update_id:10,message:{text:'hi'}};const s=setup({getUpdates:[ok([u,u])]}, {stopAfterGetUpdates:1,handle});s.entry.checkpoint=vi.fn(async()=>expect(handle).not.toHaveBeenCalled());await s.run();expect(handle).toHaveBeenCalledTimes(1);expect(s.entry.checkpoint).toHaveBeenCalledExactlyOnceWith(11);expect(s.entry.offset).toBe(11);});
+ it('does not handle a batch returned after manager lock loss',async()=>{const s=setup({getUpdates:[ok([{update_id:10}])]}, {stopAfterGetUpdates:1});let active=true;s.entry.isActive=()=>active;const original=s.tg.api;s.tg.api=vi.fn(async(...args:any[])=>{const reply=await (original as any)(...args);if(args[0]==='getUpdates')active=false;return reply;});await s.run();expect(s.deps.handle).not.toHaveBeenCalled();});
 });

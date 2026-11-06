@@ -76,3 +76,22 @@ describe("tapping a match button", () => {
     expect(db.tables.selection).toHaveLength(2);
   });
 });
+
+describe('worker claim between selection lookup and deletion',()=>{
+  it.each(['SENDING','COMPLETED'])('keeps the row after the worker changes it to %s',async status=>{
+    await toggle();
+    const remove=db.prisma.selection.deleteMany;
+    db.prisma.selection.deleteMany=async(args:unknown)=>{selections()[0].status=status;return remove(args);};
+    expect(await toggle()).toEqual({result:status==='SENDING'?'sending':'already-sent'});
+    expect(selections()).toHaveLength(1);expect(selections()[0].status).toBe(status);
+  });
+  it('preserves a replacement created by another tap rather than deleting it by a stale ID',async()=>{
+    await toggle();const remove=db.prisma.selection.deleteMany;
+    db.prisma.selection.deleteMany=async(args:unknown)=>{selections()[0].id='replacement';return remove(args);};
+    expect(await toggle()).toEqual({result:'selected'});expect(selections()[0].id).toBe('replacement');
+  });
+  it('does not hide conditional-delete database failures',async()=>{
+    await toggle();db.failNext('selection','deleteMany',new Error('database unavailable'));
+    await expect(toggle()).rejects.toThrow('database unavailable');expect(selections()).toHaveLength(1);
+  });
+});

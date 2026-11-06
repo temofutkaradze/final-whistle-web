@@ -10,10 +10,10 @@ model User {
   id            String         @id @default(cuid())
   email         String         @unique
   name          String?
-  // Scrypt hash of the password (see src/lib/password.ts). Empty only for test accounts made before logins existed.
+  // Scrypt password hash. Absent for Google-only and legacy accounts; not ownership evidence.
   passwordHash  String?
-  // Telegram connection: linkCode goes into the t.me/<bot>?start=<code> link,
-  // telegramChatId is filled in by the bot when the user opens that link.
+  // Legacy Match chat/link metadata is not authorization.
+  // Only a website-approved MatchTelegramBinding grants Match access.
   linkCode         String?   @unique
   telegramChatId   String?
   telegramLinkedAt DateTime?
@@ -30,6 +30,24 @@ model User {
   favoriteTeams FavoriteTeam[]
   sessions      Session[]
   templates     Template[]
+  newsSettings  NewsSettings?
+  newsTemplates NewsTemplate[]
+  authIdentities AuthIdentity[]
+  matchPairingChallenges MatchPairingChallenge[]
+  matchTelegramBinding MatchTelegramBinding?
+}
+
+// Google identities are bound by verified provider subject, never inferred from an email match.
+model AuthIdentity {
+  id        String   @id @default(cuid())
+  userId    String
+  provider  String   @db.VarChar(16)
+  subject   String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([provider, subject])
+  @@unique([userId, provider])
 }
 
 // A login. The browser holds the random token; only its SHA-256 is stored here.
@@ -170,4 +188,60 @@ model Template {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+
+// News is fully independent of Match (including its Telegram credentials).
+model NewsSettings {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botToken String?
+  botId String? @unique
+  botUsername String?
+  telegramChatId String?
+  defaultTemplateRef String @default("single")
+  // Single-use linking token; the browser receives the token, the database only its hash.
+  linkCodeHash String?
+  linkExpiresAt DateTime?
+  // File IDs and conversation metadata, never image bytes or Telegram credentials.
+  pending Json?
+  lastUpdateId Int?
+}
+
+model NewsTemplate {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name String
+  layout String
+  config Json
+  createdAt DateTime @default(now())
+  @@index([userId])
+}
+
+// Pending requests grant no authority. Only their hashes are stored.
+model MatchPairingChallenge {
+  id String @id @default(cuid())
+  userId String
+  botId String
+  connectionHash String @db.Char(64)
+  telegramUserId String
+  chatId String
+  codeHash String @unique @db.Char(64)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, botId, telegramUserId])
+  @@index([userId, expiresAt])
+}
+
+// Website-approved recipient, independent of the untrusted legacy User.telegramChatId.
+model MatchTelegramBinding {
+  userId String @id
+  botId String @unique
+  telegramUserId String
+  chatId String
+  authorizedAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

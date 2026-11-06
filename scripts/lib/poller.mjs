@@ -15,7 +15,7 @@ const RETRY_BAD_TOKEN_MS = 5 * 60_000;
 // bot.mjs checks this every 10 seconds for every bot it should run.
 export function shouldRestart(entry, now) {
   if (!entry) return true;
-  return Boolean(entry.failed) && now >= (entry.retryAt ?? 0);
+  return !entry.blocked && Boolean(entry.failed) && now >= (entry.retryAt ?? 0);
 }
 
 export async function runPoller(entry, { handle, onUpdateError, sleep, now = () => Date.now(), log = console.log, error = console.error }) {
@@ -30,9 +30,14 @@ export async function runPoller(entry, { handle, onUpdateError, sleep, now = () 
 
   // ---- start: who is this bot, and make sure nothing else (a webhook) blocks polling ----
   try {
+    if(entry.stop || !(entry.isActive?.() ?? true))return;
     const me = await tg.api("getMe");
     if (!me.ok) return fail(`Telegram rejected this bot token: ${me.description}. Checking again in 5 minutes.`, RETRY_BAD_TOKEN_MS);
-    await tg.api("deleteWebhook"); // a webhook would block polling
+    if(entry.stop || !(entry.isActive?.() ?? true))return;
+    const webhook = await tg.api("getWebhookInfo");
+    if (!webhook?.ok) return fail("Could not verify webhook status. No polling started.", RETRY_UNREACHABLE_MS);
+    if (webhook.result?.url) { entry.blocked = true; return fail("Existing webhook detected. No webhook was changed; polling is blocked until restart.", Infinity); }
+    if(entry.stop || !(entry.isActive?.() ?? true))return;
     await tg.api("setMyCommands", {
       commands: [
         { command: "matches", description: "Today's matches" },
@@ -47,10 +52,10 @@ export async function runPoller(entry, { handle, onUpdateError, sleep, now = () 
   }
 
   // ---- the loop ----
-  let offset = 0;
+  let offset = entry.offset ?? 0;
   let pause = 2000;
   let offline = false;
-  while (!entry.stop) {
+  while (!entry.stop && (entry.isActive?.() ?? true)) {
     let res;
     try {
       res = await tg.api("getUpdates", { timeout: 25, offset, allowed_updates: ["message", "callback_query"] }, { timeoutMs: 40_000 });
@@ -65,21 +70,26 @@ export async function runPoller(entry, { handle, onUpdateError, sleep, now = () 
     if (offline) log(`[${label}] connection is back`);
     offline = false;
     pause = 2000;
-    if (entry.stop) break;
+    if (entry.stop || !(entry.isActive?.() ?? true)) break;
 
     if (!res.ok) {
       if (res.error_code === 401) return fail(`the bot token is not valid any more (${res.description}). Checking again in 5 minutes.`, RETRY_BAD_TOKEN_MS);
       error(`[${label}] getUpdates error: ${res.description}`);
-      if (res.error_code === 409) error(`[${label}] This bot has a webhook or another poller. Use a separate bot.`);
+      if (res.error_code === 409) { entry.blocked = true; return fail("This bot has a webhook or another poller. Polling stopped until restart.", Infinity); }
       await sleep(5000);
       continue;
     }
 
     for (const update of res.result ?? []) {
+      if (entry.stop || !(entry.isActive?.() ?? true)) break;
+      if (!Number.isSafeInteger(update.update_id) || update.update_id < offset) continue;
       offset = update.update_id + 1;
+      await entry.checkpoint?.(offset);
+      entry.offset = offset;
       try {
         await handle(entry.ctx, update);
       } catch (e) {
+        if(entry.stop || !(entry.isActive?.() ?? true))break;
         error(`[${label}] failed to handle update:`, e);
         try {
           await onUpdateError?.(entry.ctx, update, e);

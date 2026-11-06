@@ -14,11 +14,12 @@ export class FakeDbError extends Error {
 }
 
 export function createFakeDb(clock: { now: number }) {
-  const tables: Record<string, Row[]> = { user: [], brand: [], match: [], selection: [], template: [], fixtureDay: [], apiUsage: [] };
+  const tables: Record<string, Row[]> = { user: [], brand: [], match: [], selection: [], template: [], fixtureDay: [], apiUsage: [], matchPairingChallenge: [], matchTelegramBinding: [] };
   const failures: { model: string; method: string; when: (args: any) => boolean; times: number; error: Error }[] = [];
   const calls: Record<string, number> = {};
+  let pairingSequence=0;
 
-  const keyOf: Record<string, string> = { user: "id", brand: "id", match: "fixtureId", selection: "id", template: "id", fixtureDay: "date", apiUsage: "day" };
+  const keyOf: Record<string, string> = { user: "id", brand: "id", match: "fixtureId", selection: "id", template: "id", fixtureDay: "date", apiUsage: "day", matchPairingChallenge: "id", matchTelegramBinding: "userId" };
   const time = (v: unknown) => (v instanceof Date ? v.getTime() : v);
 
   function related(model: string, row: Row, key: string): Row | undefined {
@@ -130,6 +131,11 @@ export function createFakeDb(clock: { now: number }) {
         }
         if (model === "selection" && row.id === undefined) row.id = `sel-${tables.selection.length + 1}-${clock.now}`;
         if (model === "selection") Object.assign(row, { status: "SELECTED", attempts: 0, ...args.data });
+        if(model==='matchPairingChallenge'){
+          if(tables[model].some(x=>x.codeHash===row.codeHash||(x.userId===row.userId&&x.botId===row.botId&&x.telegramUserId===row.telegramUserId)))throw new FakeDbError('Pairing uniqueness','P2002');
+          row.id ??= 'challenge-'+(++pairingSequence);
+        }
+        if(model==='matchTelegramBinding'&&tables[model].some(x=>x.userId===row.userId||x.botId===row.botId))throw new FakeDbError('Binding uniqueness','P2002');
         tables[model].push(row);
         return { ...row };
       }),
@@ -164,6 +170,15 @@ export function createFakeDb(clock: { now: number }) {
 
   const prisma: any = {};
   for (const m of Object.keys(tables)) prisma[m] = delegate(m);
+  let transactionQueue=Promise.resolve();
+  prisma.$transaction=(callback:any)=>{
+    const run=transactionQueue.then(async()=>{
+      const snapshot=structuredClone(tables);
+      try{return await callback(prisma);}catch(error){for(const key of Object.keys(tables))tables[key]=snapshot[key];throw error;}
+    });
+    transactionQueue=run.then(()=>{},()=>{});return run;
+  };
+  prisma.$queryRaw=async(_strings:unknown,...values:unknown[])=>tables.user.filter(u=>u.id===values[0]).map(u=>({id:u.id}));
   void keyOf;
 
   return {

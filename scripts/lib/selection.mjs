@@ -10,10 +10,14 @@ export async function toggleSelection({ prisma, userId, fixtureId, maxAgeHours, 
     if (existing.status === "COMPLETED") return { result: "already-sent" };
     // The worker is sending it right now: removing it here would break that send.
     if (existing.status === "SENDING") return { result: "sending" };
-    try {
-      await prisma.selection.delete({ where: { id: existing.id } });
-    } catch (e) {
-      if (e?.code !== "P2025") throw e; // a second tap removed it a moment earlier: same result
+    const removed = await prisma.selection.deleteMany({
+      where: { id: existing.id, userId, fixtureId, status: { in: ["SELECTED", "FAILED"] } },
+    });
+    if (!removed.count) {
+      const current = await prisma.selection.findUnique({ where: { userId_fixtureId: { userId, fixtureId } } });
+      if (current?.status === "COMPLETED") return { result: "already-sent" };
+      if (current?.status === "SENDING") return { result: "sending" };
+      if (current) return { result: "selected" }; // a replacement or another state: leave it intact
     }
     return { result: "removed" };
   }

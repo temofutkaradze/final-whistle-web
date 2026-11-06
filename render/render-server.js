@@ -28,8 +28,13 @@ const path = require('path');
 const crypto = require('crypto');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { checkTemplateHtml, withCsp } = require('./template-check.js');
+const {expandPlaceholders}=require('./final-document.js');
+const {prepareCustomDocument}=require('./custom-resources.js');
 const { chromium } = require('playwright');
 const sharp = require('sharp');
+const security = require('./security.js');
+const {createSingleFlight,createMetrics,withPageDeadline,createCapturePolicy,createDrainTracker}=require('./operations.js');
+const EMPTY_IMAGE='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
 
 const PORT = Number(process.env.RENDER_PORT) || 4500;
 
@@ -56,9 +61,10 @@ const WARMUP_TEMPLATE_PATH = templatePathFor(DEFAULT_TEMPLATE);
 // Customer-made templates ("template_html" in the request) are untrusted. Layers of protection:
 //   1. checkTemplateHtml (template-check.js) refuses scripts, event attributes, frames, forms and any URL that is
 //      not a {{placeholder}}, a data: picture or Google Fonts. It runs again here, never trusting the request.
-//   2. withCsp adds a Content-Security-Policy to the page: no script, no connections, no frames.
-//   3. guardPage below lets the browser fetch only what a post needs: data:, Google Fonts, the project's own logo /
-//      background folders and the remote logo URLs of this very request. Everything else is aborted.
+//   2. Final HTML5/CSS parsing follows all expansion; immutable image bytes form a closed manifest.
+//      Its CSP denies direct data/file/remote images; the route serves only manifest images + provider fonts.
+//   3. guardPage serves manifest images, the exact document and fixed-provider styles/fonts only.
+//      No custom page can read logo/background directories directly or load direct data images.
 // Built-in templates (render/templates) are our own files and are drawn as before.
 // ---------------------------------------------------------------------------
 const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
@@ -69,24 +75,48 @@ const ALLOWED_FILE_DIRS = [
   path.join(ROOT, '..', 'storage', 'backgrounds'),
 ].map((p) => norm(path.resolve(p)));
 
-function requestAllowed(urlStr, remoteOk) {
+function requestAllowed(urlStr, remoteOk, htmlPath) {
   let u;
   try { u = new URL(urlStr); } catch (e) { return false; }
   if (u.protocol === 'data:' || u.protocol === 'about:') return true;
   if (u.protocol === 'file:') {
     let p;
     try { p = norm(path.resolve(fileURLToPath(u))); } catch (e) { return false; }
-    return ALLOWED_FILE_DIRS.some((dir) => p === dir || p.startsWith(dir + path.sep));
+    if(htmlPath && p===norm(path.resolve(htmlPath))) return true;
+    try { security.insideFile(p,ALLOWED_FILE_DIRS.filter(dir=>dir!==norm(path.resolve(RENDERED_DIR))));return true; }catch{return false;}
   }
   if (u.protocol === 'https:' && (u.hostname === 'fonts.googleapis.com' || u.hostname === 'fonts.gstatic.com')) return true;
-  return remoteOk.has(urlStr);
+  return false; // Remote images are localized by the pinned downloader, never loaded by Chromium.
 }
 
-async function guardPage(page, remoteOk) {
-  await page.route('**/*', (route) => {
-    if (requestAllowed(route.request().url(), remoteOk)) return route.continue();
-    console.warn('[custom template] blocked request:', route.request().url().slice(0, 120));
-    return route.abort();
+const fontCache=new Map();
+const fontUrl=url=>/^https:\/\/fonts\.(googleapis|gstatic)\.com\//.test(url);
+const fontKey=request=>request.url()+'|'+(request.headers?.()['user-agent']??'');
+function cacheFont(key,value){if(fontCache.size>=64&&!fontCache.has(key))fontCache.delete(fontCache.keys().next().value);fontCache.set(key,value);}
+async function guardPage(page, remoteOk, htmlPath, manifest) {
+  // Only the fixed Google Fonts hosts use Chromium's trusted provider path.
+  // Capture browser responses once, then fulfill from memory on warm renders.
+  page.on?.('response',async response=>{
+    if(!fontUrl(response.url())||response.status()!==200||fontCache.get(fontKey(response.request()))?.body)return;
+    try{const body=await response.body();if(body.length<=4*1024*1024)cacheFont(fontKey(response.request()),{body,contentType:response.headers()['content-type']??'application/octet-stream'});}catch{}
+  });
+  page.on?.('requestfailed',request=>{if(fontUrl(request.url()))cacheFont(fontKey(request),{failed:true,until:Date.now()+30000});});
+  await page.route('**/*',async route=>{
+    const request=route.request(),url=request.url();
+    if(manifest){
+      const asset=manifest.get(url);
+      if(asset)return route.fulfill({status:200,headers:{'content-type':asset.contentType,'access-control-allow-origin':'*'},body:asset.body});
+      const type=request.resourceType?.();
+      const provider=fontUrl(url)&&((new URL(url).hostname==='fonts.googleapis.com'&&type==='stylesheet')||(new URL(url).hostname==='fonts.gstatic.com'&&type==='font'));
+      if(!(url===pathToFileURL(htmlPath).href&&type==='document')&&!provider)return route.abort();
+    }
+    if(!requestAllowed(url,remoteOk,htmlPath))return route.abort();
+    if(fontUrl(url)){
+      const entry=fontCache.get(fontKey(request));
+      if(entry?.body)return route.fulfill({status:200,headers:{'content-type':entry.contentType,'access-control-allow-origin':'*'},body:entry.body});
+      if(entry?.failed&&entry.until>Date.now())return route.abort();
+    }
+    return route.continue();
   });
 }
 
@@ -152,7 +182,7 @@ function findCachedLogo(key, allowStale) {
     const p = path.join(LOGO_CACHE_DIR, `${key}.${ext}`);
     try {
       const st = fs.statSync(p);
-      if (allowStale || Date.now() - st.mtimeMs < LOGO_CACHE_MAX_AGE_MS) return p;
+      if (st.size<=5*1024*1024 && (allowStale || Date.now() - st.mtimeMs < LOGO_CACHE_MAX_AGE_MS)) {security.insideFile(p,[LOGO_CACHE_DIR]);return p;}
     } catch (e) { /* not cached with this extension */ }
   }
   return null;
@@ -170,38 +200,43 @@ function extFromContentType(contentType, url) {
   return 'png';
 }
 
-// Returns a file:/// URL of a local copy of a remote image, or the original value when it is not
-// an http(s) URL or anything goes wrong (then the browser simply loads it from the network as before).
+const logoFlights=createSingleFlight(16);
+
+// Canonicalize first: every HTTP(S) image goes through the pinned downloader.
 async function localizeImage(url) {
-  if (!url || !/^https?:\/\//i.test(String(url))) return url;
+  url=security.imageSource(url,{fileDirectories:ALLOWED_FILE_DIRS});
+  if (!/^https?:/.test(url)) return url;
   const key = crypto.createHash('sha1').update(String(url)).digest('hex');
   const toFileUrl = (p) => pathToFileURL(p).href;
-  try {
-    const fresh = findCachedLogo(key, false);
-    if (fresh) return toFileUrl(fresh);
+  return logoFlights.run(key,async()=>{
+    try {
+      const fresh = findCachedLogo(key, false);
+      if (fresh) return toFileUrl(fresh);
 
-    fs.mkdirSync(LOGO_CACHE_DIR, { recursive: true });
-    const res = await fetch(String(url), { signal: AbortSignal.timeout(LOGO_DOWNLOAD_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 64) throw new Error('response too small to be an image');
+      fs.mkdirSync(LOGO_CACHE_DIR, { recursive: true });
+      const resource = await security.downloadPublicResource(String(url), {timeoutMs:LOGO_DOWNLOAD_TIMEOUT_MS,maxBytes:5*1024*1024});
+      const buf = resource.body;
+      if (buf.length < 64) throw new Error('response too small to be an image');
 
-    const ext = extFromContentType(res.headers.get('content-type'), url);
-    const finalPath = path.join(LOGO_CACHE_DIR, `${key}.${ext}`);
-    const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-    fs.writeFileSync(tmpPath, buf);
-    fs.renameSync(tmpPath, finalPath);
-    return toFileUrl(finalPath);
-  } catch (e) {
-    // Download failed: an expired cached copy is still better than a broken image
-    const stale = findCachedLogo(key, true);
-    if (stale) {
-      console.warn(`Logo download failed (${e.message}); using the older cached copy: ${url}`);
-      return toFileUrl(stale);
+      if(!resource.contentType.startsWith('image/'))throw new Error('Invalid image response');
+      await security.validateMatchImage(buf);
+      const ext = extFromContentType(resource.contentType, url);
+      const finalPath = path.join(LOGO_CACHE_DIR, `${key}.${ext}`);
+      const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+      fs.writeFileSync(tmpPath, buf);
+      fs.renameSync(tmpPath, finalPath);
+      return toFileUrl(finalPath);
+    } catch (e) {
+      // Download failed: an expired cached copy is still better than a broken image
+      const stale = findCachedLogo(key, true);
+      if (stale) {
+        console.warn("Logo download unavailable; using the cached image.");
+        return toFileUrl(stale);
+      }
+      console.warn("Logo download unavailable; using a transparent fallback.");
+      return EMPTY_IMAGE;
     }
-    console.warn(`Logo cache skipped (${e.message}); loading from the network: ${url}`);
-    return url;
-  }
+  });
 }
 // </logo-cache>
 
@@ -251,7 +286,7 @@ function getContext() {
   return contextPromise;
 }
 
-// Throw away a possibly stuck browser; the next getContext() starts a fresh one.
+// Explicit shutdown only. Request failures must never close other in-flight contexts.
 async function resetBrowser() {
   const b = browserPromise;
   browserPromise = null;
@@ -279,9 +314,9 @@ function withTimeout(promise, ms, label) {
 // Same pixels as page.screenshot(): the PNG is lossless, we only ask Chromium for its fast PNG
 // encoder because this PNG is just an in-memory step (file size does not matter).
 // If that is unavailable or returns an unexpected size, the standard screenshot is used instead.
-let useFastCapture = true;
+const capturePolicy=createCapturePolicy();
 async function captureHiRes(page, context) {
-  if (useFastCapture) {
+  if (capturePolicy.enabled) {
     let client = null;
     try {
       client = await context.newCDPSession(page);
@@ -292,27 +327,28 @@ async function captureHiRes(page, context) {
       );
       const buf = Buffer.from(data, 'base64');
       const meta = await sharp(buf).metadata();
-      if (meta.width === HIRES_WIDTH && meta.height === HIRES_HEIGHT) return buf;
+      if (meta.width === HIRES_WIDTH && meta.height === HIRES_HEIGHT) {capturePolicy.success();return buf;}
+      if(capturePolicy.failure())console.warn('Fast capture disabled after three qualifying failures.');
       console.warn(`Fast capture returned ${meta.width}x${meta.height}; using the standard screenshot instead.`);
     } catch (e) {
-      // A stall must go through the normal retry (fresh browser); anything else just means "not supported here"
+      // A stall retries on a new page; it never disables CDP or closes the shared browser.
       if (/timed out/.test(String(e.message))) throw e;
+      if(capturePolicy.failure(e))console.warn('Fast capture disabled after three qualifying failures.');
       console.warn('Fast capture not available, using the standard screenshot:', String(e.message).split('\n')[0]);
     } finally {
       if (client) await client.detach().catch(() => {});
     }
-    useFastCapture = false;
   }
   return page.screenshot({ type: 'png', scale: 'device', animations: 'disabled', timeout: 120000 });
 }
 
 // 2160x2700 PNG buffer -> 1080x1350 sRGB JPEG buffer (Lanczos3 downscale, light grain)
-async function makeJpeg(pngBuffer) {
+async function makeJpeg(pngBuffer, { grain = true } = {}) {
   let img = sharp(pngBuffer)
     .flatten({ background: '#000000' })          // no alpha channel in the JPEG
     .resize(FINAL_WIDTH, FINAL_HEIGHT, { fit: 'fill', kernel: sharp.kernel.lanczos3 })
     .toColourspace('srgb');
-  if (GRAIN_SIGMA > 0) {
+  if (grain && GRAIN_SIGMA > 0) {
     img = img.composite([{ input: await getGrain(), blend: 'soft-light' }]);
   }
   return img.jpeg({ quality: JPEG_QUALITY, chromaSubsampling: '4:4:4' }).toBuffer();
@@ -339,18 +375,156 @@ async function waitUntilReady(page) {
 // HTTP server
 // ---------------------------------------------------------------------------------------------
 
-const server = http.createServer((req, res) => {
-  if (req.method !== 'POST' || req.url !== '/render') {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found. POST to /render.' }));
+const renderNews = require("./news-renderer.js")({
+  getBrowser, 
+  captureHiRes, 
+  makeJpeg, 
+  sharp, 
+  outputDir: OUTPUT_DIR
+});
+
+
+async function handleNewsRequest(req, res) {
+  const secret = process.env.NEWS_RENDER_SECRET;
+  const supplied = req.headers["x-news-render-secret"];
+
+  const expectedBuffer = Buffer.from(secret || "");
+  const suppliedBuffer = Buffer.from(
+    typeof supplied === "string" ? supplied : ""
+  );
+
+  if (
+    !secret ||
+    expectedBuffer.length !== suppliedBuffer.length ||
+    !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
+  ) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Unauthorized" }));
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/news-health') {
+    res.writeHead(200, { 'Content-Type':'application/json', 'Cache-Control':'no-store' });
+    res.end(JSON.stringify({service:'final-whistle-news',protocolVersion:2}));
     return;
   }
 
-  let body = '';
-  req.on('data', (chunk) => { body += chunk; });
-  req.on('end', async () => {
-    try {
-      const d = JSON.parse(body);
+  const MAX_BYTES = 45 * 1024 * 1024;
+  let chunks = [];
+  let total = 0;
+
+  try {
+    for await (const chunk of req) {
+      total += chunk.length;
+
+      if (total > MAX_BYTES) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Request too large" }));
+        return;
+      }
+
+      chunks.push(chunk);
+    }
+
+    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+
+    
+    const job = payload.job;
+
+    if (
+      !job ||
+      typeof job !== "object" ||
+      Array.isArray(job) ||
+      !["single", "left", "right", "breaking"].includes(job.layout) ||
+      typeof job.quote !== "string" ||
+      typeof job.author !== "string" ||
+      typeof job.caption !== "string" ||
+      job.quote.length > 4096 ||
+      job.author.length > 4096 ||
+      job.caption.length > 4096 ||
+      !job.pos ||
+      typeof job.pos !== "object"
+    ) {
+      throw new Error("Invalid News job");
+    }
+
+    function validPosition(value) {
+      return (
+        Array.isArray(value) &&
+        value.length === 3 &&
+        value.every((n) => typeof n === "number" && Number.isFinite(n))
+      );
+    }
+
+    if (!validPosition(job.pos.b) || !validPosition(job.pos.c)) {
+      throw new Error("Invalid image position");
+    }
+
+    function decodeImage(value, required) {
+      if (value == null && !required) return null;
+
+      if (
+        typeof value !== "string" ||
+        !value.length ||
+        value.length > 30 * 1024 * 1024 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(value) ||
+        value.length % 4 !== 0
+      ) {
+        throw new Error("Invalid image data");
+      }
+
+      const buffer = Buffer.from(value, "base64");
+
+      if (!buffer.length || buffer.length > 20 * 1024 * 1024) {
+        throw new Error("Invalid image size");
+      }
+
+      return buffer;
+    }
+
+    const background = decodeImage(payload.background, true);
+    const circle = decodeImage(payload.circle, false);
+
+    const result = await renderNews(job, background, circle);
+
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
+  } catch (error) {
+    console.error("[news render]", error.message);
+
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "News rendering failed" }));
+  }
+}
+
+const renderGate=security.createRenderGate();
+const metrics=createMetrics();
+const draining=createDrainTracker();
+let warmUpPromise=Promise.resolve();
+const server = http.createServer(async (req,res) => {
+  const requestId=crypto.randomUUID();
+  res.setHeader('X-Request-ID',requestId);
+  if(req.method==='GET'&&req.url==='/render-health'){
+    if(!security.authorized(req.headers)){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Unauthorized'}));return;}
+    res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+    res.end(JSON.stringify({service:'final-whistle-renderer',draining:draining.draining,inflight:draining.active,...metrics.snapshot()}));return;
+  }
+  if(req.method==='GET' && req.url==='/news-health')return handleNewsRequest(req,res);
+  if(req.method!=='POST'||!['/render','/render-news'].includes(req.url)){res.writeHead(404,{'content-type':'application/json'});res.end(JSON.stringify({error:'Not found'}));return;}
+  const kind=req.url==='/render-news'?'news':'match';
+  const started=performance.now();let recorded=false;
+  const record=cancelled=>{if(recorded)return;recorded=true;const elapsed=performance.now()-started;metrics.record(kind,res.statusCode,elapsed,cancelled);console.log(`[render ${requestId}] ${kind} status=${res.statusCode} elapsed_ms=${Math.round(elapsed)}${cancelled?' cancelled':''}`);};
+  res.once('finish',()=>record(false));res.once('close',()=>record(!res.writableFinished));
+  if(!security.authorized(req.headers)){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Unauthorized'}));return;}
+  const complete=draining.begin();
+  if(!complete){res.writeHead(503,{'content-type':'application/json','retry-after':'5'});res.end(JSON.stringify({error:'Renderer is draining'}));return;}
+  let release;
+  try{
+    release=await renderGate.acquire();
+    if(req.destroyed)return;
+    if(req.url==='/render-news'){await handleNewsRequest(req,res);return;}
+    const body=await security.readBody(req,45*1024*1024);
+    const d=security.validateMatch(JSON.parse(body));
       const t0 = Date.now();
 
       // fixture_id ends up in file names: keep only safe characters
@@ -360,12 +534,12 @@ const server = http.createServer((req, res) => {
       const isCustom = typeof d.template_html === 'string' && d.template_html !== '';
       if (isCustom) {
         const check = checkTemplateHtml(d.template_html);
-        if (!check.ok) throw new Error('Custom template rejected: ' + check.errors.join(' '));
-        html = withCsp(d.template_html);
+        if (!check.ok) throw Object.assign(new Error('Custom template rejected'),{statusCode:400});
+        html = d.template_html;
       } else {
-        html = fs.readFileSync(templatePathFor(d.template), 'utf8');
+        html = withCsp(fs.readFileSync(templatePathFor(d.template), 'utf8'));
       }
-      // Remote picture URLs of this request (logos the server could not cache) may still be fetched by a custom template.
+      // Remote logos are localized before either built-in or custom templates are rendered.
       const remoteOk = new Set(
         [d.home_logo, d.away_logo, d.league_logo].filter((u) => typeof u === 'string' && /^https?:\/\//.test(u))
       );
@@ -402,41 +576,50 @@ const server = http.createServer((req, res) => {
       // <img> tag is built here, so the request can never inject HTML through this field.
       const logoUri = d.page_logo_data_uri;
       if (typeof logoUri === 'string' && logoUri.length <= 3_000_000 && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(logoUri)) {
+        await security.validateMatchImageSource(logoUri);
         pageName = `<img class="brand-logo" src="${logoUri}" alt="" style="max-height:var(--brand-logo-h,90px);max-width:var(--brand-logo-w,300px);width:auto;height:auto;object-fit:contain;">`;
       }
       // Background: either a data: URI (generated default) or a local file path
       const backgroundSrc =
         typeof d.background_data_uri === 'string' && /^data:image\/(png|jpeg|webp|svg\+xml)[;,]/.test(d.background_data_uri)
-          ? d.background_data_uri
-          : d.background_path ? pathToFileURL(String(d.background_path)).href : '';
+          ? security.imageSource(d.background_data_uri)
+          : d.background_path ? pathToFileURL(security.insideFile(String(d.background_path),[path.join(ROOT,'..','storage','backgrounds')])).href : '';
+
+      const [backgroundMetadata] = await Promise.all(
+        [backgroundSrc,homeLogoSrc,awayLogoSrc,leagueLogoFinal].map(source=>security.validateMatchImageSource(source,{fileDirectories:ALLOWED_FILE_DIRS}))
+      );
 
       const replacements = {
-        '{{BACKGROUND}}': backgroundSrc,
+        '{{BACKGROUND}}': escapeHtml(backgroundSrc),
         '{{PAGE_NAME}}': pageName,
         '{{EVENTS_CLASS}}': '',
         '{{TOTAL_EVENTS}}': d.total_events,
-        '{{LEAGUE_LOGO}}': leagueLogoFinal,
-        '{{HOME_LOGO}}': homeLogoSrc,
-        '{{HOME_NAME}}': d.home_team,
+        '{{LEAGUE_LOGO}}': escapeHtml(leagueLogoFinal??''),
+        '{{HOME_LOGO}}': escapeHtml(homeLogoSrc??''),
+        '{{HOME_NAME}}': escapeHtml(d.home_team??''),
         '{{HOME_SCORE}}': d.home_score,
         '{{AWAY_SCORE}}': d.away_score,
-        '{{AWAY_LOGO}}': awayLogoSrc,
-        '{{AWAY_NAME}}': d.away_team,
+        '{{AWAY_LOGO}}': escapeHtml(awayLogoSrc??''),
+        '{{AWAY_NAME}}': escapeHtml(d.away_team??''),
         '{{HOME_EVENTS}}': d.home_events_html,
         '{{AWAY_EVENTS}}': d.away_events_html,
       };
 
-      for (const [key, value] of Object.entries(replacements)) {
-        html = html.split(key).join(String(value !== undefined && value !== null ? value : ''));
-      }
+      html = expandPlaceholders(html,replacements);
 
       html = html.replace('class="league-logo"', `class="${leagueLogoClass}"`);
 
+      // Last transformation: canonical checked bytes + immutable image manifest.
+      // Never interpolate or otherwise mutate HTML after this boundary.
+      let customManifest;
+      if(isCustom){const prepared=await prepareCustomDocument(html,ALLOWED_FILE_DIRS.filter(dir=>dir!==norm(path.resolve(RENDERED_DIR))));html=prepared.html;customManifest=prepared.manifest;}
+
       fs.mkdirSync(RENDERED_DIR, { recursive: true });
       fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-      const htmlPath = path.join(RENDERED_DIR, `${fixtureId}.html`);
-      const pngPath = path.join(OUTPUT_DIR, `${fixtureId}.png`);
-      const jpgPath = path.join(OUTPUT_DIR, `${fixtureId}.jpg`);
+      const requestId = `${fixtureId.slice(0,100)}_${crypto.randomUUID()}`;
+      const htmlPath = path.join(RENDERED_DIR, `${requestId}.html`);
+      const pngPath = path.join(OUTPUT_DIR, `${requestId}.png`);
+      const jpgPath = path.join(OUTPUT_DIR, `${requestId}.jpg`);
 
       fs.writeFileSync(htmlPath, html, 'utf8');
 
@@ -444,8 +627,8 @@ const server = http.createServer((req, res) => {
       // Never blocks rendering; n8n can read background_info.upscale_factor if it wants to react.
       let backgroundInfo = null;
       try {
-        if (d.background_path && fs.existsSync(d.background_path)) {
-          const bm = await sharp(d.background_path).metadata();
+        if (backgroundSrc.startsWith('file:')) {
+          const bm = backgroundMetadata;
           const upscale = Math.max(FINAL_WIDTH / bm.width, FINAL_HEIGHT / bm.height);
           backgroundInfo = {
             width: bm.width,
@@ -461,8 +644,8 @@ const server = http.createServer((req, res) => {
         console.warn('Could not read background metadata:', e.message);
       }
 
-      // Render with one automatic retry on a fresh browser: Chromium occasionally stalls on a
-      // screenshot (e.g. "Timeout 30000ms exceeded"); restarting it clears that state.
+      // Retry on a new page without closing the browser serving concurrent News/Match jobs.
+      // A real browser disconnect already invalidates the shared browser/context in getBrowser.
       const MAX_ATTEMPTS = 2;
       let pngBuffer = null; // 2160x2700 screenshot, kept in memory
       let tPageReady = 0;
@@ -471,20 +654,23 @@ const server = http.createServer((req, res) => {
         try {
           const context = await getContext();
           page = await context.newPage();
-          if (isCustom) await guardPage(page, remoteOk);
-          await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 60000 });
-          await waitUntilReady(page);
-          tPageReady = Date.now();
+          // Built-ins have a closed, validated data-only payload and CSP.
+          // Keep native browser caching; untrusted customer CSS additionally needs interception.
+          pngBuffer = await withPageDeadline(page,async()=>{
+            if(isCustom) await guardPage(page, remoteOk, htmlPath, customManifest);
+            await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 60000 });
+            await waitUntilReady(page);
+            tPageReady = Date.now();
 
-          // High-resolution intermediate (2160x2700), returned as a buffer (no disk write)
-          pngBuffer = await captureHiRes(page, context);
+            // High-resolution intermediate (2160x2700), returned as a buffer (no disk write)
+            return captureHiRes(page, context);
+          });
           await page.close().catch(() => {});
           break; // success
         } catch (err) {
           console.warn(`[fixture ${fixtureId}] render attempt ${attempt}/${MAX_ATTEMPTS} failed: ${String(err.message).split('\n')[0]}`);
           if (page) await page.close().catch(() => {});
-          // Throw away the (possibly stuck) browser so the next attempt starts clean
-          await resetBrowser();
+          // Only this request's page is closed; never reset a healthy shared browser here.
           if (attempt === MAX_ATTEMPTS) throw err;
         }
       }
@@ -517,12 +703,38 @@ const server = http.createServer((req, res) => {
         jpg_path: jpgPath,
         background_info: backgroundInfo,
       }));
-    } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message, stack: err.stack }));
-    }
-  });
+  }catch(err){
+    const status=err.statusCode??(err instanceof SyntaxError?400:500);
+    res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify({error:status<500?'Render request rejected':'Rendering failed'}));
+  }finally{release?.();complete();}
 });
+server.requestTimeout=30000;
+server.headersTimeout=10000;
+
+// Stop admission first; finish already admitted Match/News work and warm-up before closing Chromium.
+// No forced timeout closes active jobs. A supervisor must allow time for this drain.
+let shutdownPromise;
+function drainAndClose(){
+  if(shutdownPromise)return shutdownPromise;
+  const idle=draining.drain();
+  console.log('Renderer draining; waiting for admitted work and warm-up.');
+  const closed=new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+  server.closeIdleConnections?.();
+  shutdownPromise=(async()=>{
+    // Observe all promises immediately, including listener-close errors during startup.
+    await Promise.all([idle.then(()=>server.closeIdleConnections?.()),warmUpPromise,closed]);
+    await resetBrowser();
+    console.log('Renderer drain complete.');
+  })();
+  return shutdownPromise;
+}
+const shutdown=()=>{drainAndClose().then(()=>process.exit(0),()=>{console.error('Renderer drain failed.');process.exitCode=1;});};
+process.on('SIGINT',shutdown);
+process.on('SIGTERM',shutdown);
+// Only disposable test/preview children expose this private IPC path; no HTTP shutdown endpoint.
+if(process.env.FW_RENDER_CHILD==='1'&&process.send){
+  process.on('message',message=>{if(message==='shutdown')shutdown();});
+}
 
 // Only this computer needs to reach the render server.
 server.listen(PORT, '127.0.0.1', () => {
@@ -531,19 +743,22 @@ server.listen(PORT, '127.0.0.1', () => {
 
   // Warm-up: start Chromium, load the web fonts and run one complete dry render now, so the first
   // real render is as fast as all the others (and problems show up now, not during a match).
-  (async () => {
+  if(draining.draining)return;
+  warmUpPromise=(async () => {
     const t = Date.now();
+    let page;
     try {
       const context = await getContext();
-      const page = await context.newPage();
-      await page.goto(pathToFileURL(WARMUP_TEMPLATE_PATH).href, { waitUntil: 'load', timeout: 60000 });
-      await waitUntilReady(page);
-      const png = await captureHiRes(page, context);
-      await page.close();
+      page = await context.newPage();
+      const png=await withPageDeadline(page,async()=>{
+        await page.goto(pathToFileURL(WARMUP_TEMPLATE_PATH).href, { waitUntil: 'load', timeout: 60000 });
+        await waitUntilReady(page);
+        return captureHiRes(page, context);
+      });
       await makeJpeg(png);
       console.log(`Warm-up done in ${((Date.now() - t) / 1000).toFixed(1)} s.`);
     } catch (e) {
       console.warn('Warm-up skipped:', String(e.message).split('\n')[0]);
-    }
+    }finally{if(page)await page.close().catch(()=>{});}
   })();
 });

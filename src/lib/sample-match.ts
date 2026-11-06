@@ -1,3 +1,4 @@
+import {expandPlaceholders} from "../../render/final-document.js";
 // Pure helpers (no Node APIs, safe to import in the browser): the invented sample match used for sample posts and
 // template previews, and the way a template's {{PLACEHOLDERS}} are filled.
 
@@ -99,6 +100,5 @@ export function fillPlaceholders(html: string, brandHtml: string): string {
     "{{HOME_EVENTS}}": s.home_events_html,
     "{{AWAY_EVENTS}}": s.away_events_html,
   };
-  for (const [k, v] of Object.entries(values)) html = html.split(k).join(String(v));
-  return html;
+  return expandPlaceholders(html,values);
 }

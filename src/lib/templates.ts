@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fillPlaceholders } from "@/lib/sample-match";
-import { withCsp } from "../../render/template-check.js";
+import { previewDocument } from "../../render/final-document.js";
 
 // Built-in templates: the files live in render/templates/<key>.html (the render server reads the same files).
 export const BUILTIN_TEMPLATES = [
@@ -31,5 +31,5 @@ export async function builtinTemplateHtml(key: string): Promise<string> {
 
 // Preview of any template html (built-in or the customer's own): filled with the invented match and locked down.
 export function previewHtml(html: string, brandHtml: string): string {
-  return withCsp(fillPlaceholders(html, brandHtml));
+  return previewDocument(fillPlaceholders(html, brandHtml));
 }

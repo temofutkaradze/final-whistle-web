@@ -3,13 +3,19 @@
 // Long polling: no public URL / ngrok needed.
 //
 // Every customer has their OWN bot (token saved on the dashboard, stored encrypted). There is no shared bot.
-// That bot belongs to one customer: the first chat that presses Start is bound to the account, everyone
-// else is refused. New / removed customer bots are picked up automatically every 10 seconds.
+// That bot belongs to one customer: private Telegram pairing requires explicit website approval.
+// Legacy chat IDs alone never authorize access. New / removed customer bots are picked up automatically every 10 seconds.
 //
 // Commands:  /matches  today's matches     type a team name -> search     send an image -> background
 // IMPORTANT: a bot that has a webhook (like the one n8n uses) cannot be polled; use new bots.
 
+import {approvedMatchUser,createMatchAccessHandler} from "./lib/match-pairing.mjs";
 import { prisma } from "./lib/db.mjs";
+import {acquireProcessLock,processLockClient,PROCESS_LOCKS} from "./lib/process-lock.mjs";
+import {updateCursor} from "./lib/update-cursor.mjs";
+let stopping=false,managerLock;
+const stop=()=>{stopping=true;for(const entry of running.values())entry.stop=true;};
+for(const signal of ["SIGINT","SIGTERM"])process.on(signal,stop);
 import { makeTelegram } from "./lib/telegram.mjs";
 import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR } from "./lib/render.mjs";
@@ -17,6 +23,7 @@ import { ensureDay, formatKickoff, localDate } from "./lib/football.mjs";
 import { MAX_AGE_HOURS } from "./lib/config.mjs";
 import { runPoller, shouldRestart } from "./lib/poller.mjs";
 import { toggleSelection } from "./lib/selection.mjs";
+import {withBackgroundFile,assignPendingBackground} from "./lib/background-files.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_BUTTONS = 50;
@@ -38,8 +45,7 @@ const matchButton = (m, selected) => [
 // ctx = { tg, ownerId }   ownerId = the customer who owns this bot.
 
 async function findUser(ctx, chatId) {
-  const u = await prisma.user.findUnique({ where: { id: ctx.ownerId } });
-  return u && u.telegramChatId === chatId ? u : null;
+  return approvedMatchUser(prisma,ctx.ownerId,{botId:ctx.botId,connectionToken:ctx.connectionToken,identity:{chatId,telegramUserId:chatId}});
 }
 
 async function selectedIds(userId, fixtureIds) {
@@ -84,6 +90,7 @@ async function sendMatchList(ctx, chatId, user, search) {
     );
     return;
   }
+  if(!await findUser(ctx,chatId))return;
   const chosen = await selectedIds(user.id, matches.map((m) => m.fixtureId));
   await tg.sendMessage(chatId, search ? "Found:" : "Pick the matches you want a post for (tap again to remove).", {
     reply_markup: { inline_keyboard: matches.map((m) => matchButton(m, chosen.has(m.fixtureId))) },
@@ -91,20 +98,7 @@ async function sendMatchList(ctx, chatId, user, search) {
 }
 
 async function handleStart(ctx, chatId) {
-  const { tg } = ctx;
-
-  // The first chat that presses Start in this customer's bot becomes the owner's chat.
-  const owner = await prisma.user.findUnique({ where: { id: ctx.ownerId } });
-  if (!owner) return;
-  if (!owner.telegramChatId) {
-    await prisma.user.update({ where: { id: owner.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
-    await tg.sendMessage(chatId, "Connected! 🎉\n\n" + HELP);
-    console.log(`Linked ${owner.email} to their own bot (chat ${chatId})`);
-  } else if (owner.telegramChatId === chatId) {
-    await tg.sendMessage(chatId, HELP);
-  } else {
-    await tg.sendMessage(chatId, "This bot is private.");
-  }
+  await ctx.tg.sendMessage(chatId, HELP);
 }
 
 // A background image arrived (photo or image file).
@@ -140,13 +134,14 @@ async function handleUpload(ctx, msg, chatId) {
     return;
   }
 
+  if(!await findUser(ctx,chatId))return;
   if (open.length === 1) {
-    await prisma.selection.update({ where: { id: open[0].id }, data: { backgroundPath: file } });
+    await withBackgroundFile(prisma,file,(tx,resolved)=>tx.selection.update({ where: { id: open[0].id }, data: { backgroundPath: resolved } }));
     await tg.sendMessage(chatId, `Background saved for ${open[0].match.homeTeam} - ${open[0].match.awayTeam}.`);
     return;
   }
 
-  await prisma.user.update({ where: { id: user.id }, data: { pendingBackgroundPath: file } });
+  await withBackgroundFile(prisma,file,(tx,resolved)=>tx.user.update({ where: { id: user.id }, data: { pendingBackgroundPath: resolved } }));
   const buttons = open.map((s) => [{ text: `⚽ ${s.match.homeTeam} - ${s.match.awayTeam}`, callback_data: `bg:${s.fixtureId}` }]);
   buttons.push([{ text: "All my selected matches", callback_data: "bg:all" }]);
   await tg.sendMessage(chatId, "Which match is this background for?", { reply_markup: { inline_keyboard: buttons } });
@@ -193,12 +188,7 @@ async function handleCallback(ctx, cb) {
   if (kind === "bg") {
     const path = user.pendingBackgroundPath;
     if (!path) return answer("Please send the image again.");
-    const where =
-      arg === "all"
-        ? { userId: user.id, status: "SELECTED" }
-        : { userId: user.id, status: "SELECTED", fixtureId: Number(arg) };
-    const res = await prisma.selection.updateMany({ where, data: { backgroundPath: path } });
-    await prisma.user.update({ where: { id: user.id }, data: { pendingBackgroundPath: null } });
+    const res = await assignPendingBackground(prisma,user.id,path,arg === "all" ? "all" : Number(arg));
     await answer(res.count ? "Background saved ✅" : "No matching selection.");
     await tg.api("editMessageText", {
       chat_id: chatId,
@@ -211,7 +201,7 @@ async function handleCallback(ctx, cb) {
   await answer("Unknown action.");
 }
 
-async function handle(ctx, update) {
+async function handleAuthorized(ctx, update) {
   if (update.callback_query) return handleCallback(ctx, update.callback_query);
 
   const msg = update.message;
@@ -233,6 +223,8 @@ async function handle(ctx, update) {
   return sendMatchList(ctx, chatId, user, text.toLowerCase());
 }
 
+const handle = createMatchAccessHandler({prisma,onAuthorized:handleAuthorized});
+
 // Something went wrong while handling a message or a tap: tell the person briefly instead of staying silent.
 async function tellProblem(ctx, update) {
   if (update.callback_query) await ctx.tg.api("answerCallbackQuery", { callback_query_id: update.callback_query.id, text: "Something went wrong. Please try again." });
@@ -247,10 +239,10 @@ const running = new Map(); // token -> { stop, ctx, tg, label }
 async function syncBots() {
   const wanted = new Map(); // token -> { ownerId, label }
 
-  const owners = await prisma.user.findMany({ where: { botToken: { not: null } }, select: { id: true, email: true, botToken: true } });
+  const owners = await prisma.user.findMany({ where: { botToken: { not: null } }, select: { id: true, email: true, botToken: true, botId: true } });
   for (const o of owners) {
     try {
-      wanted.set(decryptSecret(o.botToken), { ownerId: o.id, label: o.email });
+      wanted.set(decryptSecret(o.botToken), { ownerId: o.id, label: o.email, botId:o.botId, connectionToken:o.botToken });
     } catch (e) {
       console.error(`[${o.email}] cannot read the saved bot token: ${e.message}`);
     }
@@ -261,9 +253,11 @@ async function syncBots() {
     if (!shouldRestart(existing, Date.now())) continue; // running, or failed a moment ago and waiting before the next try
     if (existing) existing.stop = true;
     const tg = makeTelegram(token);
-    const entry = { stop: false, failed: false, tg, label: info.label, ctx: { tg, ownerId: info.ownerId }, lastFailure: existing?.lastFailure ?? null };
+    if(stopping || !managerLock?.active()) return;
+    const cursor=await updateCursor(info.ownerId,info.botId);
+    const entry = { stop: false, failed: false, tg, label: info.label, ctx: { tg, ownerId: info.ownerId, botId:info.botId, connectionToken:info.connectionToken }, lastFailure: existing?.lastFailure ?? null, ...cursor, isActive:()=>!stopping&&Boolean(managerLock?.active()) };
     running.set(token, entry);
-    pollLoop(entry).catch((e) => {
+    entry.task=pollLoop(entry).catch((e) => {
       console.error(`[${info.label}] polling crashed:`, e);
       entry.failed = true; // the next round restarts it (a crash used to end this bot until the program was restarted)
       entry.retryAt = Date.now() + 30_000;
@@ -278,8 +272,10 @@ async function syncBots() {
 }
 
 async function main() {
+  managerLock=await acquireProcessLock(processLockClient("final-whistle-match-manager-v3"),{key:PROCESS_LOCKS.matchBot,codePrefix:"MATCH_MANAGER",onLost:detail=>{console.error("[Match] MATCH_MANAGER_LOCK_LOST",JSON.stringify(detail));stop();}});
+  if(!managerLock){console.error("[Match] MATCH_MANAGER_ALREADY_RUNNING; no second poller started.");return;}
   console.log("Bot manager started. (Ctrl+C to stop)");
-  while (true) {
+  while (!stopping && managerLock.active()) {
     try {
       await syncBots();
     } catch (e) {
@@ -289,4 +285,4 @@ async function main() {
   }
 }
 
-main();
+main().catch(()=>{console.error("[Match] MATCH_MANAGER_STOPPED; check the database and local cursor storage.");process.exitCode=1;}).finally(async()=>{stop();await Promise.allSettled([...running.values()].map(entry=>entry.task));await managerLock?.release();await prisma.$disconnect();});

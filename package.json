@@ -15,12 +15,15 @@
     "render": "node --env-file=.env render/render-server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "news:bot": "node --env-file=.env scripts/news-bot.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "css-tree": "3.1.0",
     "next": "^16.4.3",
+    "parse5": "7.3.0",
     "pg": "^8.23.1",
     "playwright": "^1.64.1",
     "react": "^19.3.1",

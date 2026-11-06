@@ -1,0 +1,11 @@
+﻿import type {Prisma,PrismaClient,User} from '@prisma/client';
+export type MatchIdentity={chatId:string;telegramUserId:string};
+export type MatchScope={botId?:string;connectionToken?:string;identity?:MatchIdentity};
+type Database=Pick<Prisma.TransactionClient,'user'|'matchTelegramBinding'|'matchPairingChallenge'>;
+export function privateMatchIdentity(message:unknown):MatchIdentity|null;
+export function lockMatchAccount(tx:Prisma.TransactionClient,userId:string):Promise<boolean>;
+export function approvedMatchUser(db:Database,userId:string,scope?:MatchScope):Promise<(User&{telegramChatId:string})|null>;
+export function issueMatchChallenge(db:PrismaClient,scope:MatchScope&{ownerId:string},identity:MatchIdentity,clock?:()=>number):Promise<{code:string;expiresAt:Date}|null>;
+export function reviewMatchChallenge(db:Database,userId:string,code:string,clock?:()=>number):Promise<{telegramUserId:string;chatId:string;botUsername:string|null;expiresAt:string}|null>;
+export function confirmMatchChallenge(db:PrismaClient,userId:string,code:string,clock?:()=>number):Promise<boolean>;
+export function createMatchAccessHandler(deps:{prisma:PrismaClient;onAuthorized:(ctx:any,update:any,user:User)=>Promise<unknown>;clock?:()=>number}):(ctx:any,update:any)=>Promise<unknown>;
