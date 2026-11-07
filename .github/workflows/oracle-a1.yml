@@ -1,154 +1,61 @@
+name: Oracle A1 - Always Free capacity attempt
 
-name: Oracle A1 - Diagnostic
-
-on:
+"on":
   workflow_dispatch:
+    inputs:
+      reconcile_token:
+        description: "Reconciliation ONLY: exact pending token from the dedicated safety issue"
+        required: false
+        default: ""
+        type: string
+      reconciliation_evidence:
+        description: "Admin/maintainer attestation: OCI audit/support confirms no instance was created (20+ characters)"
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: "*/10 * * * *"
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: oracle-a1-provision
   cancel-in-progress: false
 
 jobs:
-  diagnose:
-    runs-on: ubuntu-latest
+  provision:
+    # Absent/false means no runner or OCI call; enable only after explicit approval.
+    if: ${{ vars.OCI_A1_PROVISIONING_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
-
     steps:
-      - name: Install OCI CLI
-        run: python3 -m pip install oci-cli
-
-      - name: Configure Oracle credentials
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Mock-only safety regression tests
         env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s scripts/oci -p 'test_*.py' -v
+      - name: Install pinned OCI CLI
+        run: python -m pip install --disable-pip-version-check 'oci-cli==3.96.0'
+      - name: Verify free-tier safety and attempt one launch
+        env:
+          OCI_REGION: ${{ secrets.OCI_REGION }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.oci"
-
-          printf '%s\n' "$OCI_PRIVATE_KEY" > "$HOME/.oci/oci_api_key.pem"
-          chmod 600 "$HOME/.oci/oci_api_key.pem"
-
-          {
-            echo '[DEFAULT]'
-            echo "user=$OCI_USER_OCID"
-            echo "tenancy=$OCI_TENANCY_OCID"
-            echo "fingerprint=$OCI_FINGERPRINT"
-            echo "region=$OCI_REGION"
-            echo "key_file=$HOME/.oci/oci_api_key.pem"
-          } > "$HOME/.oci/config"
-
-          chmod 600 "$HOME/.oci/config"
-
-      - name: Diagnose Oracle instance listing
-        env:
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-
-          ROOT = os.environ["OCI_TENANCY_OCID"]
-          COMPARTMENT = os.environ["OCI_COMPARTMENT_OCID"]
-
-          def run_oci(*args):
-              command = ["oci", *args, "--output", "json"]
-
-              result = subprocess.run(
-                  command,
-                  text=True,
-                  capture_output=True
-              )
-
-              print(
-                  "Command:",
-                  " ".join(command[:3]),
-                  flush=True
-              )
-              print(
-                  "Return code:",
-                  result.returncode,
-                  flush=True
-              )
-              print(
-                  "Stdout length:",
-                  len(result.stdout),
-                  flush=True
-              )
-              print(
-                  "Stderr:",
-                  result.stderr[:1500],
-                  flush=True
-              )
-
-              if result.returncode != 0:
-                  raise RuntimeError(
-                      "Oracle CLI command failed"
-                  )
-
-              output = result.stdout.strip()
-
-              if not output:
-                  raise RuntimeError(
-                      "Oracle CLI returned an empty response"
-                  )
-
-              try:
-                  return json.loads(output)
-              except json.JSONDecodeError:
-                  print(
-                      "Response is not valid JSON.",
-                      flush=True
-                  )
-                  raise
-
-          for name, cid in [
-              ("ROOT", ROOT),
-              ("FINAL_WHISTLE", COMPARTMENT)
-          ]:
-              print(
-                  "\nChecking compartment:",
-                  name,
-                  flush=True
-              )
-
-              response = run_oci(
-                  "compute",
-                  "instance",
-                  "list",
-                  "--compartment-id",
-                  cid,
-                  "--all"
-              )
-
-              instances = response.get("data", [])
-
-              print(
-                  "Instance count:",
-                  len(instances),
-                  flush=True
-              )
-
-              for instance in instances:
-                  print(
-                      "Instance:",
-                      instance.get("display-name"),
-                      instance.get("lifecycle-state"),
-                      flush=True
-                  )
-
-          print(
-              "\nDIAGNOSTIC PASSED",
-              flush=True
-          )
-          PY
+          OCI_SUBNET_OCID: ${{ secrets.OCI_SUBNET_OCID }}
+          OCI_IMAGE_OCID: ${{ secrets.OCI_IMAGE_OCID }}
+          OCI_SSH_PUBLIC_KEY: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          OCI_A1_PROVISIONING_ENABLED: ${{ vars.OCI_A1_PROVISIONING_ENABLED }}
+          OCI_A1_STATE_ISSUE_NUMBER: ${{ vars.OCI_A1_STATE_ISSUE_NUMBER }}
+          OCI_A1_RECONCILE_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.reconcile_token || '' }}
+          OCI_A1_RECONCILIATION_EVIDENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.reconciliation_evidence || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/oci/provision_a1.py --execute
