@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Install OCI CLI
-        run: pip install oci-cli
+        run: python3 -m pip install --user oci-cli
 
       - name: Configure Oracle credentials
         env:
@@ -29,10 +29,14 @@ jobs:
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
           OCI_REGION: ${{ secrets.OCI_REGION }}
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+        shell: bash
         run: |
-          mkdir -p ~/.oci
-          printf '%s\n' "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
-          chmod 600 ~/.oci/oci_api_key.pem
+          set -euo pipefail
+
+          mkdir -p "$HOME/.oci"
+
+          printf '%s\n' "$OCI_PRIVATE_KEY" > "$HOME/.oci/oci_api_key.pem"
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
 
           {
             echo '[DEFAULT]'
@@ -41,9 +45,9 @@ jobs:
             echo "fingerprint=$OCI_FINGERPRINT"
             echo "region=$OCI_REGION"
             echo "key_file=$HOME/.oci/oci_api_key.pem"
-          } > ~/.oci/config
+          } > "$HOME/.oci/config"
 
-          chmod 600 ~/.oci/config
+          chmod 600 "$HOME/.oci/config"
 
       - name: Check existing instances and launch
         env:
@@ -60,110 +64,213 @@ jobs:
           import subprocess
           import sys
           import tempfile
+          from pathlib import Path
 
-          def oci(*args):
+          ROOT = os.environ["OCI_TENANCY_OCID"]
+          COMPARTMENT = os.environ["OCI_COMPARTMENT_OCID"]
+          SUBNET = os.environ["OCI_SUBNET_OCID"]
+          IMAGE = os.environ["OCI_IMAGE_OCID"]
+          SSH_KEY = os.environ["OCI_SSH_PUBLIC_KEY"].strip()
+
+          NAME = "final-whistle-server"
+          SHAPE = "VM.Standard.A1.Flex"
+
+          def run_oci(*args):
+              command = ["oci", *args, "--output", "json"]
               result = subprocess.run(
-                  ["oci", *args, "--output", "json"],
+                  command,
                   text=True,
                   capture_output=True
               )
-              if result.returncode:
+
+              if result.returncode != 0:
+                  print(
+                      "OCI command failed:",
+                      " ".join(args[:3]),
+                      file=sys.stderr
+                  )
                   print(result.stderr, file=sys.stderr)
-                  raise RuntimeError("Oracle CLI command failed")
-              return json.loads(result.stdout)
+                  raise RuntimeError("Oracle CLI request failed")
 
-          root = os.environ["OCI_TENANCY_OCID"]
-          compartment = os.environ["OCI_COMPARTMENT_OCID"]
-          subnet = os.environ["OCI_SUBNET_OCID"]
-          image = os.environ["OCI_IMAGE_OCID"]
-          ssh_key = os.environ["OCI_SSH_PUBLIC_KEY"].strip()
+              output = result.stdout.strip()
 
-          if not ssh_key.startswith("ssh-ed25519 "):
-              raise RuntimeError("Invalid SSH public key")
+              if not output:
+                  raise RuntimeError(
+                      "Oracle CLI returned an empty response"
+                  )
 
-          # Check both compartments before creating anything.
-          for cid in dict.fromkeys([root, compartment]):
-              instances = oci(
+              try:
+                  return json.loads(output)
+              except json.JSONDecodeError:
+                  print(
+                      "Oracle CLI returned unexpected output:",
+                      output[:500],
+                      file=sys.stderr
+                  )
+                  raise
+
+          def existing_instances(compartment_id):
+              response = run_oci(
                   "compute", "instance", "list",
-                  "--compartment-id", cid,
+                  "--compartment-id", compartment_id,
                   "--all"
-              )["data"]
+              )
+              return response.get("data", [])
 
-              for instance in instances:
-                  if instance["lifecycle-state"] != "TERMINATED":
-                      print(
-                          "Existing instance found:",
-                          instance["display-name"],
-                          instance["lifecycle-state"]
-                      )
-                      print("Skipping launch to prevent duplicates.")
-                      sys.exit(0)
+          def check_duplicates():
+              for compartment_id in dict.fromkeys(
+                  [ROOT, COMPARTMENT]
+              ):
+                  instances = existing_instances(compartment_id)
 
-          # Verify the requested subnet and image.
-          oci("network", "subnet", "get", "--subnet-id", subnet)
-          oci("compute", "image", "get", "--image-id", image)
+                  for instance in instances:
+                      if (
+                          instance.get("display-name") == NAME
+                          and instance.get("lifecycle-state")
+                          not in ("TERMINATED", "TERMINATING")
+                      ):
+                          print(
+                              "Server already exists:",
+                              instance.get("display-name"),
+                              instance.get("lifecycle-state")
+                          )
+                          return True
 
-          domains = oci(
+              return False
+
+          def launch(ad, metadata_path):
+              command = [
+                  "oci", "compute", "instance", "launch",
+                  "--compartment-id", COMPARTMENT,
+                  "--availability-domain", ad,
+                  "--display-name", NAME,
+                  "--shape", SHAPE,
+                  "--shape-config",
+                  '{"ocpus":2,"memoryInGBs":12}',
+                  "--image-id", IMAGE,
+                  "--subnet-id", SUBNET,
+                  "--assign-public-ip", "true",
+                  "--boot-volume-size-in-gbs", "50",
+                  "--metadata", "file://" + metadata_path,
+                  "--output", "json"
+              ]
+
+              return subprocess.run(
+                  command,
+                  text=True,
+                  capture_output=True
+              )
+
+          if not SSH_KEY.startswith("ssh-ed25519 "):
+              raise RuntimeError(
+                  "OCI_SSH_PUBLIC_KEY is not a valid "
+                  "ED25519 public key"
+              )
+
+          print("Checking for an existing server...", flush=True)
+
+          if check_duplicates():
+              print("Skipping: duplicate prevention.")
+              sys.exit(0)
+
+          print("Checking subnet and image...", flush=True)
+
+          run_oci(
+              "network", "subnet", "get",
+              "--subnet-id", SUBNET
+          )
+
+          run_oci(
+              "compute", "image", "get",
+              "--image-id", IMAGE
+          )
+
+          print("Reading availability domains...", flush=True)
+
+          response = run_oci(
               "iam", "availability-domain", "list",
-              "--compartment-id", root
-          )["data"]
+              "--compartment-id", ROOT
+          )
+
+          domains = response.get("data", [])
 
           if not domains:
-              raise RuntimeError("No availability domains found")
+              raise RuntimeError(
+                  "No availability domains found"
+              )
 
-          metadata = {"ssh_authorized_keys": ssh_key}
+          metadata = {
+              "ssh_authorized_keys": SSH_KEY
+          }
 
           with tempfile.NamedTemporaryFile(
-              mode="w", suffix=".json", delete=False
+              mode="w",
+              suffix=".json",
+              delete=False
           ) as f:
               json.dump(metadata, f)
-              metadata_file = f.name
+              metadata_path = f.name
 
           try:
               for domain in domains:
                   ad = domain["name"]
-                  print("Trying availability domain:", ad, flush=True)
 
-                  command = [
-                      "oci", "compute", "instance", "launch",
-                      "--compartment-id", compartment,
-                      "--availability-domain", ad,
-                      "--display-name", "final-whistle-server",
-                      "--shape", "VM.Standard.A1.Flex",
-                      "--shape-config",
-                      '{"ocpus":2,"memoryInGBs":12}',
-                      "--image-id", image,
-                      "--subnet-id", subnet,
-                      "--assign-public-ip", "true",
-                      "--boot-volume-size-in-gbs", "50",
-                      "--metadata", "file://" + metadata_file,
-                      "--output", "json"
-                  ]
-
-                  result = subprocess.run(
-                      command, text=True, capture_output=True
+                  print(
+                      "Trying availability domain:",
+                      ad,
+                      flush=True
                   )
 
+                  result = launch(ad, metadata_path)
+
                   if result.returncode == 0:
-                      instance = json.loads(result.stdout)["data"]
+                      output = result.stdout.strip()
+
+                      if not output:
+                          raise RuntimeError(
+                              "Launch returned empty output"
+                          )
+
+                      instance = json.loads(output)["data"]
+
                       print("INSTANCE CREATED")
-                      print("Instance OCID:", instance["id"])
-                      print("State:", instance["lifecycle-state"])
+                      print("Instance ID:", instance["id"])
+                      print(
+                          "State:",
+                          instance["lifecycle-state"]
+                      )
+                      print(
+                          "Future runs will skip this server."
+                      )
                       sys.exit(0)
 
                   error = result.stderr
-                  if "Out of host capacity" in error or \
-                     "Out of capacity" in error:
-                      print("No A1 capacity in", ad)
+
+                  if (
+                      "Out of host capacity" in error
+                      or "Out of capacity" in error
+                  ):
+                      print(
+                          "No A1 capacity in:",
+                          ad,
+                          flush=True
+                      )
                       continue
 
                   print(error, file=sys.stderr)
+
                   raise RuntimeError(
-                      "Launch failed for a reason other than capacity"
+                      "Launch failed for a reason "
+                      "other than capacity"
                   )
 
-              print("No A1 capacity available. Retry next schedule.")
+              print(
+                  "No A1 capacity available. "
+                  "GitHub Actions will retry "
+                  "on the next schedule."
+              )
 
           finally:
-              os.remove(metadata_file)
+              Path(metadata_path).unlink(missing_ok=True)
+
           PY
