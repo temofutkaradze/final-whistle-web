@@ -1,9 +1,10 @@
 import {checkTemplateHtml,collectUrls} from '../render/template-check.js';
 import {tinyApng} from './helpers/image-fixtures';
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -16,8 +17,14 @@ import { sampleMatchFields } from "@/lib/sample-match";
 
 const ROOT = resolve(__dirname, "..");
 const RENDER_DIR = join(ROOT, "render");
-const PROBE_FILE = join(RENDER_DIR, "output", "vitest-probe.json");
-const PREFIX = "vitest_";
+const PROBE_FILE = join(RENDER_DIR, "output", "vitest_server_probe.json");
+const PREFIX = "vitest_server_";
+const ownsOutput = (name: string) => name.startsWith(PREFIX);
+const cleanupOutputs = (dir: string) => {
+  if (existsSync(dir)) for (const name of readdirSync(dir)) {
+    if (ownsOutput(name)) rmSync(join(dir, name), { force: true });
+  }
+};
 
 let child: ChildProcess;
 let port = 0;
@@ -41,7 +48,7 @@ const PROBES = [
   "https://media.example/home.png",
   "https://evil.example/x.png",
   "http://127.0.0.1:3000/api/health",
-  fileUrl(join(RENDER_DIR, "rendered", "vitest_x.html")),
+  fileUrl(join(RENDER_DIR, "rendered", "vitest_server_x.html")),
   fileUrl(join(ROOT, "storage", "backgrounds", "photo.jpg")),
   fileUrl(join(RENDER_DIR, "cache", "logos", "a.png")),
   fileUrl(join(RENDER_DIR, "assets", "leagues", "39.png")),
@@ -70,7 +77,7 @@ beforeAll(async () => {
   port = await freePort();
   child = spawn(process.execPath, ["--require", join(__dirname, "helpers", "fake-playwright.cjs"), join(RENDER_DIR, "render-server.js")], {
     cwd: ROOT,
-    env: { ...process.env, RENDER_PORT: String(port), NEWS_RENDER_SECRET:"isolated-match-render-test", FW_DOWNLOAD_PROBE:join(RENDER_DIR,"output","vitest_downloads.jsonl"), FW_CAPTURE_PROBE:join(RENDER_DIR,"output","vitest_capture.jsonl"), FW_PROBE_FILE: PROBE_FILE, FW_PROBE_URLS: JSON.stringify(PROBES) },
+    env: { ...process.env, RENDER_PORT: String(port), NEWS_RENDER_SECRET:"isolated-match-render-test", FW_DOWNLOAD_PROBE:join(RENDER_DIR,"output","vitest_server_downloads.jsonl"), FW_CAPTURE_PROBE:join(RENDER_DIR,"output","vitest_server_capture.jsonl"), FW_PROBE_FILE: PROBE_FILE, FW_PROBE_URLS: JSON.stringify(PROBES) },
   });
   child.stdout?.on("data", (d) => (log += d));
   child.stderr?.on("data", (d) => (log += d));
@@ -86,7 +93,7 @@ afterAll(() => {
   child?.kill();
   for (const dir of ["rendered", "output"]) {
     const p = join(RENDER_DIR, dir);
-    if (existsSync(p)) for (const f of readdirSync(p)) if (f.startsWith(PREFIX) || f === "vitest-probe.json") rmSync(join(p, f), { force: true });
+    cleanupOutputs(p);
   }
 });
 
@@ -217,7 +224,7 @@ describe("render server (fake Chromium)", () => {
   });
 
   it('localizes every noncanonical HTTPS spelling through the protected downloader',async()=>{
-    const probe=join(RENDER_DIR,'output','vitest_downloads.jsonl');
+    const probe=join(RENDER_DIR,'output','vitest_server_downloads.jsonl');
     const variants=[' https://images.example.com/r1-space.png','https:images.example.com/r1-slashes.png','https:\\images.example.com/r1-backslash.png','HTTPS://images.example.com/r1-case.png'];
     for(const [index,value] of variants.entries()){
       const response=await post(base('noncanonical_'+index,{home_logo:value}));expect(response.status).toBe(200);
@@ -303,7 +310,7 @@ it('validates resources assembled after placeholder substitution before Chromium
 });
 
 it('deduplicates concurrent canonical logo misses without caching failures',async()=>{
- const probe=join(RENDER_DIR,'output','vitest_downloads.jsonl'),url='https://images.example.com/singleflight-regression.png';
+ const probe=join(RENDER_DIR,'output','vitest_server_downloads.jsonl'),url='https://images.example.com/singleflight-regression.png';
  const count=()=>existsSync(probe)?readFileSync(probe,'utf8').trim().split('\n').filter(line=>line&&JSON.parse(line)===url).length:0;
  const start=count();const [a,b]=await Promise.all([post(base('flight_a',{home_logo:url,away_logo:url})),post(base('flight_b',{home_logo:'HTTPS://images.example.com/singleflight-regression.png',away_logo:url}))]);
  expect(a.status).toBe(200);expect(b.status).toBe(200);expect(count()-start).toBe(1);expect((await post(base('flight_retry',{home_logo:url}))).status).toBe(200);expect(count()-start).toBe(2);
@@ -317,10 +324,26 @@ it('adds unique request IDs and authenticates bounded route metrics without chan
  const protocol=await fetch(url+'/news-health',{headers:{'x-news-render-secret':'isolated-match-render-test'}});expect(await protocol.json()).toEqual({service:'final-whistle-news',protocolVersion:2});
 });
 it('keeps fast capture after one failure and falls back permanently only after three consecutive failures',async()=>{
- const probe=join(RENDER_DIR,'output','vitest_capture.jsonl');writeFileSync(probe,'');
+ const probe=join(RENDER_DIR,'output','vitest_server_capture.jsonl');writeFileSync(probe,'');
  expect((await post(base('fast_one',{home_team:'FAST_CAPTURE_ALWAYS'}))).status).toBe(200);
  expect((await post(base('fast_recovered'))).status).toBe(200);
  let events=readFileSync(probe,'utf8').trim().split('\n').map(line=>JSON.parse(line));expect(events.map(e=>e.standard)).toEqual([false,true,false]);
  writeFileSync(probe,'');for(let i=0;i<3;i++)expect((await post(base('fast_fail_'+i,{home_team:'FAST_CAPTURE_ALWAYS'}))).status).toBe(200);expect((await post(base('fast_disabled'))).status).toBe(200);
  events=readFileSync(probe,'utf8').trim().split('\n').map(line=>JSON.parse(line));expect(events.filter(e=>!e.standard)).toHaveLength(3);expect(events.filter(e=>e.standard)).toHaveLength(4);
+});
+
+it("cleanup removes only owned files and preserves lifecycle and unrelated outputs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fw-render-cleanup-"));
+  const owned = ["vitest_server_t_classic_uuid.jpg", "vitest_server_probe.json"];
+  const retained = ["vitest_lifecycle_drain_a_uuid.jpg", "news_1234.jpg", "customer-post.jpg"];
+  try {
+    for (const name of [...owned, ...retained]) writeFileSync(join(dir, name), name);
+    cleanupOutputs(dir);
+    for (const name of owned) expect(existsSync(join(dir, name)), name).toBe(false);
+    for (const name of retained) expect(readFileSync(join(dir, name), "utf8"), name).toBe(name);
+    cleanupOutputs(dir); // Idempotent cleanup must still leave foreign output intact.
+    expect(readdirSync(dir).sort()).toEqual([...retained].sort());
+  } finally {
+    rmSync(dir, { recursive: true, force: true }); // Only this test's mkdtemp directory.
+  }
 });
