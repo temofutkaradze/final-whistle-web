@@ -112,6 +112,48 @@ def decode_oci(result):
     return payload["data"]
 
 
+def response_format(text):
+    if not text or not text.strip():
+        return "empty"
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError):
+        return "non-json"
+    return ("json-object" if isinstance(value, dict) else
+            "json-array" if isinstance(value, list) else "json-scalar")
+
+
+def command_diagnostic(args, result):
+    # Only static command words; never arguments, IDs, payloads, or response bodies.
+    words = args[:3]
+    name = " ".join(words) if all(re.fullmatch(r"[a-z-]+", w) for w in words) else "unknown"
+    print("OCI command=" + name + " exit=" + str(result.returncode) +
+          " stdout_format=" + response_format(result.stdout) +
+          " stdout_chars=" + str(len(result.stdout or "")) +
+          " stderr_format=" + response_format(result.stderr) +
+          " stderr_chars=" + str(len(result.stderr or "")), flush=True)
+
+
+SDK_INSTANCE_LIST = """
+import json, os, sys
+import oci
+from oci_cli.cli_util import to_dict
+try:
+    config = oci.config.from_file(os.environ["OCI_CLI_CONFIG_FILE"])
+    client = oci.core.ComputeClient(config, timeout=(10, 60),
+                                   retry_strategy=oci.retry.NoneRetryStrategy())
+    response = oci.pagination.list_call_get_all_results(
+        client.list_instances, compartment_id=sys.argv[1])
+    if response.status != 200 or not isinstance(response.data, list):
+        raise RuntimeError("Invalid SDK instance-list response")
+    print(json.dumps({"data": to_dict(response.data)}))
+except oci.exceptions.ServiceError as error:
+    print(json.dumps({"code": error.code, "status": error.status,
+                      "message": "SDK inventory read failed"}), file=sys.stderr)
+    sys.exit(1)
+"""
+
+
 class CLI:
     def __init__(self, env, directory):
         self.directory = Path(directory)
@@ -147,6 +189,19 @@ class CLI:
                 env=self.env, capture_output=True, text=True, timeout=120, check=False)
         except (subprocess.TimeoutExpired, OSError):
             raise Unsafe("OCI timeout or CLI failure; outcome requires review") from None
+        command_diagnostic(args, result)
+        if (tuple(args[:3]) == ("compute", "instance", "list") and "--all" in args and
+                result.returncode == 0 and not (result.stdout or "").strip()):
+            # OCI CLI 3.96 render() suppresses falsy list data. Do not infer an empty
+            # inventory: confirm it through the already-installed SDK's HTTP response.
+            compartment = args[args.index("--compartment-id") + 1]
+            try:
+                verified = subprocess.run([sys.executable, "-c", SDK_INSTANCE_LIST, compartment],
+                    env=self.env, capture_output=True, text=True, timeout=120, check=False)
+            except (subprocess.TimeoutExpired, OSError):
+                raise Unsafe("SDK inventory verification failed; no launch") from None
+            command_diagnostic(("sdk", "instance", "list"), verified)
+            return collection(decode_oci(verified))
         return decode_oci(result)
 
     def launch(self, payload, retry_token):
