@@ -2,6 +2,8 @@
 import base64
 import copy
 import json
+import io
+from contextlib import redirect_stdout
 import os
 import struct
 import subprocess
@@ -484,6 +486,63 @@ class ProvisionTests(unittest.TestCase):
         for value in ("", "not json", "{}", '{"data":'):
             with self.assertRaises(p.Unsafe):
                 p.decode_oci(subprocess.CompletedProcess([], 0, value, ""))
+
+    def test_blank_cli_instance_list_requires_sdk_confirmation(self):
+        for data in ([], [instance()]):
+            with tempfile.TemporaryDirectory() as folder:
+                cli = p.CLI(self.env, folder)
+                responses = [subprocess.CompletedProcess([], 0, "", ""),
+                    subprocess.CompletedProcess([], 0, json.dumps({"data": data}), "")]
+                with patch("provision_a1.subprocess.run", side_effect=responses) as call:
+                    self.assertEqual(cli.call("compute", "instance", "list",
+                        "--compartment-id", self.env["OCI_COMPARTMENT_OCID"], "--all"), data)
+                self.assertEqual(call.call_count, 2)
+                self.assertEqual(call.call_args_list[1].args[0][1:3], ["-c", p.SDK_INSTANCE_LIST])
+
+    def test_blank_cli_list_does_not_hide_sdk_auth_failure_or_bad_response(self):
+        for verified in (subprocess.CompletedProcess([], 1, "", '{"code":"NotAuthenticated","status":401}'),
+                         subprocess.CompletedProcess([], 0, "", ""),
+                         subprocess.CompletedProcess([], 0, '{"data":{}}', ""),
+                         subprocess.CompletedProcess([], 0, '{"data":null}', "")):
+            with tempfile.TemporaryDirectory() as folder:
+                cli = p.CLI(self.env, folder)
+                with patch("provision_a1.subprocess.run", side_effect=[
+                    subprocess.CompletedProcess([], 0, "", ""), verified]):
+                    with self.assertRaises(p.Unsafe):
+                        cli.call("compute", "instance", "list",
+                                 "--compartment-id", self.env["OCI_COMPARTMENT_OCID"], "--all")
+
+    def test_empty_or_malformed_other_commands_remain_fail_closed(self):
+        for words in (("compute", "instance", "get"), ("compute", "instance", "launch"),
+                      ("compute", "shape", "list")):
+            with tempfile.TemporaryDirectory() as folder:
+                cli = p.CLI(self.env, folder)
+                with patch("provision_a1.subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 0, "", "")) as call:
+                    with self.assertRaises(p.Unsafe):
+                        cli.call(*words)
+                    self.assertEqual(call.call_count, 1)
+
+    def test_diagnostics_identify_command_exit_and_format_without_sensitive_bytes(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            p.command_diagnostic(("compute", "instance", "list", "--compartment-id", "SECRET-ID"),
+                                subprocess.CompletedProcess([], 0, "", "SECRET-KEY"))
+            p.command_diagnostic(("compute", "instance", "launch", "--from-json", "SECRET-PAYLOAD"),
+                                subprocess.CompletedProcess([], 1, "<html>SECRET-TOKEN</html>", "SECRET-PRIVATE"))
+        log = out.getvalue()
+        self.assertIn("command=compute instance list exit=0 stdout_format=empty", log)
+        self.assertIn("command=compute instance launch exit=1 stdout_format=non-json", log)
+        self.assertNotIn("SECRET", log)
+        self.assertNotIn("<html>", log)
+
+    def test_valid_instance_json_does_not_add_an_sdk_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cli = p.CLI(self.env, folder)
+            with patch("provision_a1.subprocess.run",
+                       return_value=subprocess.CompletedProcess([], 0, '{"data":[]}', "")) as call:
+                self.assertEqual(cli.call("compute", "instance", "list", "--all"), [])
+                self.assertEqual(call.call_count, 1)
 
     def test_cli_disables_retries_and_enforces_one_launch(self):
         with tempfile.TemporaryDirectory() as folder:
