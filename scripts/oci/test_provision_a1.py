@@ -127,6 +127,11 @@ class FakeCLI:
                     "lifecycle-state": "AVAILABLE", "size-in-mbs": 47694}
         if prefix == ("compute", "shape", "list"):
             return [{"shape": p.SHAPE, "is-flexible": True}]
+        if prefix == ("limits", "service", "list"):
+            return [{"name":"compute"}, {"name":"block-storage"}]
+        if prefix == ("limits", "limit-definition", "list"):
+            return [{"name":"standard-a1-core-count", "scope-type":"AD",
+                     "is-resource-availability-supported":True}]
         if prefix == ("limits", "resource-availability", "get"):
             return copy.deepcopy(self.limits[args[args.index("--limit-name") + 1]])
         raise AssertionError("Unexpected fake call")
@@ -237,6 +242,25 @@ class ProvisionTests(unittest.TestCase):
                 self.run_fake()
             self.assertFalse(self.cli.launches)
             self.assertFalse(self.store.history)
+
+    def test_limit_failure_diagnostics_are_read_only_and_keep_gate_closed(self):
+        self.cli.overrides[("limits", "resource-availability", "get")] = p.OCIError("NotAuthorizedOrNotFound")
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(p.OCIError):
+            self.run_fake()
+        self.assertIn("service=compute limit=standard-a1-core-count ad_scoped=true", output.getvalue())
+        self.assertIn("Catalog limit=standard-a1-core-count scope=AD availability_supported=true", output.getvalue())
+        self.assertNotIn(self.env["OCI_TENANCY_OCID"], output.getvalue())
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
+
+    def test_catalog_access_failure_does_not_mask_original_limit_failure(self):
+        self.cli.overrides[("limits", "resource-availability", "get")] = p.OCIError("OriginalLimitError")
+        self.cli.overrides[("limits", "service", "list")] = p.OCIError("CatalogAccessDenied")
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(p.OCIError, "OriginalLimitError"):
+            self.run_fake()
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
 
     def test_no_capacity_is_clean_and_only_one_attempt(self):
         self.cli.launch_result = p.OCIError("InternalError", capacity=True)
