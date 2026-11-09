@@ -315,24 +315,19 @@ class Audit:
         end = self.now.replace(hour=0, minute=0, second=0, microsecond=0)
         self.report["billing"] = {"query_start": start.isoformat(), "query_end": end.isoformat(),
             "window": "calendar_month_to_last_utc_midnight_NOT_verified_subscription_period",
-            "reports_are_delayed": True, "remaining_free_allowance": "UNVERIFIED", "rows": []}
+            "reports_are_delayed": True, "remaining_free_allowance": "UNVERIFIED", "api_access": {}, "rows": []}
         if start >= end:
             self.error("usage", "billing", "no_completed_daily_interval")
             return
-        for query in ("USAGE", "COST"):
+        for query in ("USAGE", "USAGE_ONLY", "COST"):
             details = dict(tenant_id=self.tenancy, time_usage_started=start, time_usage_ended=end,
                 granularity="DAILY", query_type=query, group_by=["skuPartNumber", "unit", "region"])
             rows = self.read("usage", request_summarized_usages_details=details)
-            if rows is None and query == "USAGE":
-                # The official USAGE_ANALYSIS_READ permission supports USAGE_ONLY.
-                # Preserve the original denial and the missing COST evidence.
-                query = "USAGE_ONLY"
-                details = dict(details, query_type=query)
-                rows = self.read("usage", request_summarized_usages_details=details)
+            self.report["billing"]["api_access"][query] = "READ_SUCCEEDED" if rows is not None else "READ_FAILED"
             if rows is None:
                 continue
             if not rows:
-                self.error("usage", query, "no_billing_rows_NOT_zero_usage")
+                self.error("usage", query, "no_billing_rows_NOT_zero_usage", query=query)
             matched = False
             for row in rows:
                 sku = row.get("sku_part_number")
@@ -362,7 +357,7 @@ class Audit:
                 except (AuditError, TypeError, ValueError, AttributeError):
                     self.error("usage", query, "ambiguous_billing_row")
             if not matched and rows:
-                self.error("usage", query, "target_skus_absent_NOT_zero_usage")
+                self.error("usage", query, "target_skus_absent_NOT_zero_usage", query=query)
 
     def run(self):
         try:

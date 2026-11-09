@@ -153,6 +153,16 @@ class AuditTests(unittest.TestCase):
                 self.assertTrue(any(x["operation"] == "usage" for x in report["errors"]))
                 self.assertEqual(report["billing"]["remaining_free_allowance"], "UNVERIFIED")
 
+    def test_empty_success_explicitly_checks_all_three_access_types(self):
+        self.fake.override["usage"] = a.Page({"items": []})
+        report = self.run_audit()
+        self.assertEqual(report["billing"]["api_access"],
+                         {"USAGE": "READ_SUCCEEDED", "USAGE_ONLY": "READ_SUCCEEDED", "COST": "READ_SUCCEEDED"})
+        queries = [args["request_summarized_usages_details"]["query_type"] for op, _, args in self.fake.calls if op == "usage"]
+        self.assertEqual(queries, ["USAGE", "USAGE_ONLY", "COST"])
+        self.assertEqual(report["billing"]["remaining_free_allowance"], "UNVERIFIED")
+        self.assertEqual({e.get("query") for e in report["errors"] if e["operation"] == "usage"}, set(queries))
+
     def test_usage_permission_failure_does_not_prevent_inventory_report(self):
         self.fake.override["usage"] = a.AuditError("NotAuthorizedOrNotFound")
         report = self.run_audit()
@@ -191,7 +201,7 @@ class AuditTests(unittest.TestCase):
     def test_billing_window_is_unfiltered_tenancy_not_verified_reset_or_balance(self):
         report = self.run_audit()
         queries = [args["request_summarized_usages_details"] for op, _, args in self.fake.calls if op == "usage"]
-        self.assertEqual({q["query_type"] for q in queries}, {"USAGE", "COST"})
+        self.assertEqual({q["query_type"] for q in queries}, {"USAGE", "USAGE_ONLY", "COST"})
         self.assertTrue(all(q["tenant_id"] == ROOT and "filter" not in q for q in queries))
         self.assertTrue(all(q["time_usage_started"].day == 1 and q["time_usage_ended"].hour == 0 for q in queries))
         self.assertTrue(report["billing"]["reports_are_delayed"])
