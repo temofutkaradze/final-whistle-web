@@ -361,6 +361,33 @@ def finish_attempt(store, pending, status):
     store.save(pending, dict(pending, revision=pending["revision"] + 1, status=status))
 
 
+def diagnose_limit_catalog(cli, env, service, limit, ad):
+    # Read-only metadata only. Never convert a failed cost check into permission to launch.
+    print("Limit lookup failed service=" + service + " limit=" + limit +
+          " ad_scoped=" + str(bool(ad)).lower(), flush=True)
+    try:
+        services = collection(cli.call("limits", "service", "list", "--compartment-id",
+                                       env["OCI_TENANCY_OCID"], "--all"))
+        known = sorted(x["name"] for x in services if x.get("name") in
+                       {"compute", "compute-core", "compute-memory", "block-storage"})
+        print("Available relevant limit services=" + ",".join(known), flush=True)
+        definitions = collection(cli.call("limits", "limit-definition", "list", "--compartment-id",
+            env["OCI_TENANCY_OCID"], "--service-name", service, "--all"))
+        for item in definitions:
+            name = item.get("name")
+            if isinstance(name, str) and (name.startswith("standard-a1-") or name == "total-storage-gb"):
+                require(re.fullmatch(r"[a-z0-9-]{1,100}", name) is not None,
+                        "Invalid limit catalog metadata")
+                scope = item.get("scope-type")
+                print("Catalog limit=" + name + " scope=" +
+                      (scope if scope in ("AD", "REGION", "GLOBAL") else "UNKNOWN") +
+                      " availability_supported=" +
+                      str(item.get("is-resource-availability-supported") is True).lower(),
+                      flush=True)
+    except Unsafe:
+        print("Read-only Limits catalog could not be verified; original failure retained", flush=True)
+
+
 def available(cli, env, service, limit, amount, cap=None, ad=None):
     # Root usage/headroom prevents counting just this compartment's free allocation.
     scopes = [env["OCI_TENANCY_OCID"], env["OCI_COMPARTMENT_OCID"]]
@@ -369,7 +396,11 @@ def available(cli, env, service, limit, amount, cap=None, ad=None):
                 "--service-name", service, "--limit-name", limit]
         if ad:
             args += ["--availability-domain", ad]
-        value = document(cli.call(*args))
+        try:
+            value = document(cli.call(*args))
+        except OCIError:
+            diagnose_limit_catalog(cli, env, service, limit, ad)
+            raise
         used, remaining = number(value.get("used")), number(value.get("available"))
         print("Verified limit=" + limit + " scope=" + ("root" if i == 0 else "target") +
               " used=" + str(used) + " available=" + str(remaining), flush=True)

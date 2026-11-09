@@ -11,7 +11,7 @@ Only eu-paris-1 / hsNq:EU-PARIS-1-AD-1 / final-whistle-servers / VM.Standard.A1.
 
 Paris must be the ready home region. Root and compartment availability must both be readable; root A1 used+available must establish enforced ceilings <=2 OCPU/12 GB with enough remaining allocation. The actual A1 limits are standard-a1-core-count and standard-a1-memory-count, both AD-scoped.
 Because Paris is verified to have exactly the expected one AD, the root AD ceiling is also the regional ceiling.
-Both root and target headroom and the <=200 GB root block-storage envelope are required. Unknown, unlimited, excessive or insufficient limits fail closed. Limits are not a billing guarantee; live tenancy eligibility/IAM remain unverified.
+Both root and target headroom and the <=200 GB root block-storage envelope are required. Unknown, unlimited, excessive or insufficient limits fail closed. A failed Limits lookup logs only relevant catalog names/scopes and command/error categories, never credentials or response bodies; diagnostics cannot authorize a launch. Limits are not a billing guarantee; live tenancy eligibility/IAM remain unverified.
 
 The first cloud operation lists instances, then a second list immediately precedes launch. Any nonterminated Final Whistle name/tag prevents creation, including STOPPED and TERMINATING. Exactly one launch per workflow attempt; OCI automatic retries disabled. Existing resources are never changed.
 
