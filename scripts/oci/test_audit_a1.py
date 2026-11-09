@@ -279,7 +279,7 @@ class AuditTests(unittest.TestCase):
         self.assertIn("cron: \"*/10 * * * *\"", workflow)
         self.assertIn("if: ${{ vars.OCI_A1_PROVISIONING_ENABLED == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.audit_only) }}", workflow)
         audit_job = workflow.split("\n  audit:\n", 1)[1]
-        self.assertIn("if: ${{ github.event_name == 'workflow_dispatch' && inputs.audit_only }}", audit_job)
+        self.assertIn("if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.audit_only) }}", audit_job)
         self.assertNotIn("provision_a1.py --execute", audit_job)
         self.assertNotIn("issues: write", audit_job)
         self.assertNotIn("GITHUB_TOKEN", audit_job)
