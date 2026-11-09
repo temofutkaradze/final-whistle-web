@@ -78,7 +78,7 @@ Evidence collection:
 - Enumerate root plus nested compartments using access_level=ANY and compartment_id_in_subtree=true, then attempt reads in each. Inspect every READY subscribed region and its ADs. Listing succeeds only for enumerable scopes; even a successful list is not a proof of full tenancy permissions. Denied compartments are recorded as partial coverage, never silently treated as empty.
 - List A1 VM/bare-metal instances and boot/block volumes independently of attachments and instance lifetime. Retained and detached volumes are included in the volume lists. ATTACHED/ATTACHING/DETACHING are distinguished from UNATTACHED; failed attachment reads yield UNKNOWN. Unknown metadata is reported, not replaced with a zero-size assumption. The inventory is not a historical usage ledger or an atomic snapshot.
 - Query target-region root/target service usage/headroom separately in every enumerated AD. A response of 41 available cores remains ordinary admission information and is explicitly marked not a billing entitlement.
-- Query tenancy-level unfiltered USAGE and COST summaries grouped by SKU, unit and region, from calendar-month start to the last completed UTC midnight. This is an explicit observation window, not a verified subscription billing/reset period. Quantities/costs are kept separate by exact unit and currency; absent rows, missing fields, negative/corrective or forecast ambiguity and permission errors never become proof of zero consumption. No remaining-free balance is calculated from delayed reports.
+- Query tenancy-level unfiltered USAGE and COST summaries (with a read-only USAGE_ONLY fallback if the full USAGE read is denied, keeping the denial and missing COST evidence visible) grouped by SKU, unit and region, from calendar-month start to the last completed UTC midnight. This is an explicit observation window, not a verified subscription billing/reset period. Quantities/costs are kept separate by exact unit and currency; absent rows, missing fields, negative/corrective or forecast ambiguity and permission errors never become proof of zero consumption. No remaining-free balance is calculated from delayed reports.
 - Boot-volume metadata can confirm observed size and base/auto-tuned VPU settings; the official model has no property that proves future free capacity AND performance billing. Matching 50 GB/10 VPU, a free capacity SKU, existing zero-cost records and an estimator are not sufficient to classify a new volume as free. Complete storage allocation and the subscription's capacity/performance treatment remain necessary.
 
 The JSON report hashes resource/compartment IDs and excludes names, account identifiers, subscription IDs, tags, credentials, response bodies and private keys. It records observed footprint, coverage failures, per-SKU usage/cost evidence and missing billing prerequisites. A redacted artifact oracle-a1-read-only-audit is retained seven days, including when some reads fail. No generated report is committed. Do not upload the original rate-card CSV to Git.
@@ -155,7 +155,7 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 py -3 -m unittest discover -s scripts/oci -p "test_*.py" -v
 ~~~
 
-74 mock-only tests passed locally for this proposal, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
+75 mock-only tests passed locally for this proposal, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
 
 Pinned CLI 3.96.0 launch option source was inspected offline during preparation. Full Windows CLI installation hit long-path limitations; GitHub uses Ubuntu. Earlier deployed runs exercised GitHub and OCI reads; this proposal makes no live OCI calls and does not claim verified billing eligibility.
 
@@ -166,3 +166,23 @@ References:
 - [GitHub concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
 
 Limit identifiers and AD scope are based on [Oracle Compute Quotas](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/resourcequotas_topic-Compute_Quotas.htm). Invented regional limit names must not be restored. Numeric usage/headroom diagnostics contain no credentials.
+
+### Live read-only verification, 2026-11-09
+
+[Audit run 42558281901](https://github.com/temofutkaradze/final-whistle-web/actions/runs/42558281901) executed from the PR branch; the provisioning job was SKIPPED and no state-write permission was granted to the audit job. All 74 tests at that revision passed in the runner. The redacted JSON was successfully [preserved as an artifact](https://github.com/temofutkaradze/final-whistle-web/actions/runs/42558281901/artifacts/13648835032).
+
+Confirmed: Paris is the home region; two compartments (root and target) and one subscribed region/AD were enumerated; no A1 instance was returned by their instance lists. Root and target service reads each reported used=0, available=41 OCPUs / 277 GB memory / 30,720 GB storage. These are service limits, not remaining free allowance.
+
+Incomplete evidence: all eight volume/attachment reads in root and target, plus USAGE and COST queries, returned NotAuthorizedOrNotFound. Thus the empty volume/billing arrays and observed footprint zeroes are NOT evidence of no volumes or no historical usage. The audit exits 2 and labels inventory PARTIAL. Oracle's official API endpoints include Paris for Usage; the query uses documented SKU/unit/region grouping and calendar-day bounds, so changing to an arbitrary region or treating these denials as empty data is inappropriate. The USAGE_ONLY fallback is probed separately when available.
+
+An OCI administrator must review existing API-user group access; this proposal makes no IAM changes. The documented read-only permissions needed for the denied operations are VOLUME_INSPECT, VOLUME_ATTACHMENT_INSPECT and INSTANCE_INSPECT in each audited scope, and USAGE_REPORT_READ at tenancy level for full cost/usage queries. Existing successful instance reads already provide instance visibility in the enumerated scopes. If only USAGE_ANALYSIS_READ is granted, USAGE_ONLY can provide quantity evidence but cannot replace the missing COST read.
+
+Example policy statements for the actual API-user group, ONLY if separately approved by the operator:
+
+~~~text
+Allow group <OCI_API_GROUP> to inspect volumes in tenancy
+Allow group <OCI_API_GROUP> to inspect volume-attachments in tenancy
+Allow group <OCI_API_GROUP> to read usage-report in tenancy
+~~~
+
+Verify INSTANCE_INSPECT is already covered in the same scopes. Do not request manage permissions or billing upgrades for this audit. See [Oracle Core API permissions](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/corepolicyreference_topic-Permissions_Required_for_Each_API_Operation.htm) and [Cost Analysis IAM/query types](https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/costanalysisoverview.htm).

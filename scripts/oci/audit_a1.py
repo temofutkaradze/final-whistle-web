@@ -157,15 +157,19 @@ class Audit:
             "risks": ["inventory_is_not_an_atomic_snapshot", "zero_or_absent_cost_is_not_free_entitlement",
                 "resource_metadata_does_not_prove_future_billing", "rate_card_is_not_remaining_allowance"]}
 
-    def error(self, operation, scope, category):
+    def error(self, operation, scope, category, query=None):
         if len(self.report["errors"]) < 500:
-            self.report["errors"].append({"operation": operation, "scope_ref": ref(scope), "category": category})
+            entry = {"operation": operation, "scope_ref": ref(scope), "category": category}
+            if query in ("USAGE", "USAGE_ONLY", "COST"):
+                entry["query"] = query
+            self.report["errors"].append(entry)
 
     def read(self, operation, region=REGION, **args):
         try:
             return self.reader.read(operation, region, **args)
         except AuditError as error:
-            self.error(operation, [region, args.get("compartment_id")], str(error))
+            query = args.get("request_summarized_usages_details", {}).get("query_type")
+            self.error(operation, [region, args.get("compartment_id")], str(error), query)
             return None
 
     def unique(self, rows, key, operation):
@@ -319,6 +323,12 @@ class Audit:
             details = dict(tenant_id=self.tenancy, time_usage_started=start, time_usage_ended=end,
                 granularity="DAILY", query_type=query, group_by=["skuPartNumber", "unit", "region"])
             rows = self.read("usage", request_summarized_usages_details=details)
+            if rows is None and query == "USAGE":
+                # The official USAGE_ANALYSIS_READ permission supports USAGE_ONLY.
+                # Preserve the original denial and the missing COST evidence.
+                query = "USAGE_ONLY"
+                details = dict(details, query_type=query)
+                rows = self.read("usage", request_summarized_usages_details=details)
             if rows is None:
                 continue
             if not rows:

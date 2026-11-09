@@ -160,6 +160,20 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(report["billing"]["rows"], [])
         self.assertTrue(any(x["operation"] == "usage" for x in report["errors"]))
 
+    def test_usage_only_permission_collects_quantity_without_hiding_cost_denial(self):
+        def query(op, region, args):
+            kind = args["request_summarized_usages_details"]["query_type"]
+            if kind in ("USAGE", "COST"):
+                raise a.AuditError("NotAuthorizedOrNotFound")
+            return a.Page({"items": [{"sku_part_number": "B93297", "unit": "OCPU_HOURS",
+                "computed_quantity": 10, "time_usage_started": "2026-11-01T00:00:00Z",
+                "time_usage_ended": "2026-11-02T00:00:00Z"}]})
+        self.fake.override["usage"] = query
+        report = self.run_audit()
+        self.assertEqual([x["query"] for x in report["billing"]["rows"]], ["USAGE_ONLY"])
+        self.assertEqual({e.get("query") for e in report["errors"] if e["operation"] == "usage"}, {"USAGE", "COST"})
+        self.assertEqual(report["zero_cost_eligibility"], "UNVERIFIED")
+
     def test_zero_cost_and_exact_50_10_metadata_do_not_prove_future_free_vpu(self):
         report = self.run_audit()
         self.assertTrue(all(v["matches_target_size_and_base_vpu"] for v in report["volumes"]))
