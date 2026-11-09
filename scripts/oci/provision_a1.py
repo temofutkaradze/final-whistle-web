@@ -419,19 +419,29 @@ def provision(cli, env, store=None):
     require(comp.get("id") == compartment and comp.get("name") == "final-whistle-servers" and
             comp.get("lifecycle-state") == "ACTIVE", "Unexpected target compartment")
     subnet = document(cli.call("network", "subnet", "get", "--subnet-id", env["OCI_SUBNET_OCID"]))
+    # Existing networking may live in the configured tenancy root. Never allow
+    # an arbitrary third compartment, or change where the VM itself is created.
+    network_compartment = subnet.get("compartment-id")
     require(subnet.get("id") == env["OCI_SUBNET_OCID"] and
-            subnet.get("compartment-id") == compartment and
+            network_compartment in (compartment, env["OCI_TENANCY_OCID"]) and
             subnet.get("display-name") == "final-whistle-public-subnet" and
             subnet.get("lifecycle-state") == "AVAILABLE" and
             subnet.get("prohibit-public-ip-on-vnic") is False,
             "Existing public subnet cannot be verified")
-    require(isinstance(subnet.get("vcn-id"), str) and isinstance(subnet.get("route-table-id"), str),
+    require(isinstance(subnet.get("vcn-id"), str) and
+            subnet["vcn-id"].startswith("ocid1.vcn.") and
+            isinstance(subnet.get("route-table-id"), str) and
+            subnet["route-table-id"].startswith("ocid1.routetable."),
             "Subnet network identifiers missing")
     vcn = document(cli.call("network", "vcn", "get", "--vcn-id", subnet["vcn-id"]))
-    require(vcn.get("id") == subnet["vcn-id"] and vcn.get("compartment-id") == compartment and
+    require(vcn.get("id") == subnet["vcn-id"] and vcn.get("compartment-id") == network_compartment and
             vcn.get("display-name") == "final-whistle-vcn" and
             vcn.get("lifecycle-state") == "AVAILABLE", "Unexpected existing VCN")
     route = document(cli.call("network", "route-table", "get", "--rt-id", subnet["route-table-id"]))
+    require(route.get("id") == subnet["route-table-id"] and
+            route.get("compartment-id") == network_compartment and
+            route.get("vcn-id") == vcn["id"] and route.get("lifecycle-state") == "AVAILABLE",
+            "Existing route table identity, association or state mismatch")
     rules = collection(route.get("route-rules"))
     gateways = [r.get("network-entity-id") for r in rules if r.get("destination") == "0.0.0.0/0" and
                 r.get("destination-type") == "CIDR_BLOCK" and
@@ -439,8 +449,26 @@ def provision(cli, env, store=None):
                 r["network-entity-id"].startswith("ocid1.internetgateway.")]
     require(len(gateways) == 1, "No unique existing IPv4 Internet Gateway route")
     gateway = document(cli.call("network", "internet-gateway", "get", "--ig-id", gateways[0]))
-    require(gateway.get("is-enabled") is True and gateway.get("vcn-id") == vcn["id"] and
+    require(gateway.get("id") == gateways[0] and
+            gateway.get("display-name") == "final-whistle-igw" and
+            gateway.get("compartment-id") == network_compartment and
+            gateway.get("is-enabled") is True and gateway.get("vcn-id") == vcn["id"] and
             gateway.get("lifecycle-state") == "AVAILABLE", "Internet gateway unavailable")
+    lists = subnet.get("security-list-ids")
+    require(isinstance(lists, list) and 1 <= len(lists) <= 5 and
+            all(isinstance(x, str) and x.startswith("ocid1.securitylist.") for x in lists) and
+            len(set(lists)) == len(lists), "Invalid existing subnet security-list references")
+    for list_id in lists:
+        security_list = document(cli.call("network", "security-list", "get",
+                                          "--security-list-id", list_id))
+        require(security_list.get("id") == list_id and
+                security_list.get("vcn-id") == vcn["id"] and
+                security_list.get("compartment-id") == network_compartment and
+                security_list.get("lifecycle-state") == "AVAILABLE" and
+                isinstance(security_list.get("ingress-security-rules"), list) and
+                isinstance(security_list.get("egress-security-rules"), list),
+                "Existing security list identity, association or state mismatch")
+    print("Verified existing public network and security-list associations; no network changes", flush=True)
     image = document(cli.call("compute", "image", "get", "--image-id", env["OCI_IMAGE_OCID"]))
     require(image.get("id") == env["OCI_IMAGE_OCID"] and image.get("compartment-id") is None and
             image.get("operating-system") == "Canonical Ubuntu" and

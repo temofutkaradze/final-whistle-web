@@ -70,6 +70,7 @@ class FakeCLI:
         self.second_instances = None
         self.lists = 0
         self.overrides = {}
+        self.network_compartment = env.get("OCI_COMPARTMENT_OCID")
         self.launches = []
         self.launch_result = instance("PROVISIONING")
         self.limits = {
@@ -100,18 +101,27 @@ class FakeCLI:
         if prefix == ("iam", "compartment", "get"):
             return {"id": self.env["OCI_COMPARTMENT_OCID"], "name": "final-whistle-servers", "lifecycle-state": "ACTIVE"}
         if prefix == ("network", "subnet", "get"):
-            return {"id": self.env["OCI_SUBNET_OCID"], "compartment-id": self.env["OCI_COMPARTMENT_OCID"],
+            return {"id": self.env["OCI_SUBNET_OCID"], "compartment-id": self.network_compartment,
                     "display-name": "final-whistle-public-subnet", "lifecycle-state": "AVAILABLE",
                     "prohibit-public-ip-on-vnic": False, "vcn-id": "ocid1.vcn.oc1.eu-paris-1.test",
-                    "route-table-id": "ocid1.routetable.oc1.eu-paris-1.test"}
+                    "route-table-id": "ocid1.routetable.oc1.eu-paris-1.test",
+                    "security-list-ids": ["ocid1.securitylist.oc1.eu-paris-1.test"]}
         if prefix == ("network", "vcn", "get"):
-            return {"id": "ocid1.vcn.oc1.eu-paris-1.test", "compartment-id": self.env["OCI_COMPARTMENT_OCID"],
+            return {"id": "ocid1.vcn.oc1.eu-paris-1.test", "compartment-id": self.network_compartment,
                     "display-name": "final-whistle-vcn", "lifecycle-state": "AVAILABLE"}
         if prefix == ("network", "route-table", "get"):
-            return {"route-rules": [{"destination": "0.0.0.0/0", "destination-type": "CIDR_BLOCK",
+            return {"id": "ocid1.routetable.oc1.eu-paris-1.test", "compartment-id": self.network_compartment,
+                    "vcn-id": "ocid1.vcn.oc1.eu-paris-1.test", "lifecycle-state": "AVAILABLE",
+                    "route-rules": [{"destination": "0.0.0.0/0", "destination-type": "CIDR_BLOCK",
                                     "network-entity-id": "ocid1.internetgateway.oc1.eu-paris-1.test"}]}
         if prefix == ("network", "internet-gateway", "get"):
-            return {"is-enabled": True, "vcn-id": "ocid1.vcn.oc1.eu-paris-1.test", "lifecycle-state": "AVAILABLE"}
+            return {"id": "ocid1.internetgateway.oc1.eu-paris-1.test", "display-name": "final-whistle-igw",
+                    "compartment-id": self.network_compartment, "is-enabled": True,
+                    "vcn-id": "ocid1.vcn.oc1.eu-paris-1.test", "lifecycle-state": "AVAILABLE"}
+        if prefix == ("network", "security-list", "get"):
+            return {"id": "ocid1.securitylist.oc1.eu-paris-1.test", "compartment-id": self.network_compartment,
+                    "vcn-id": "ocid1.vcn.oc1.eu-paris-1.test", "lifecycle-state": "AVAILABLE",
+                    "ingress-security-rules": [], "egress-security-rules": []}
         if prefix == ("compute", "image", "get"):
             return {"id": self.env["OCI_IMAGE_OCID"], "compartment-id": None,
                     "operating-system": "Canonical Ubuntu", "operating-system-version": "24.04",
@@ -146,6 +156,70 @@ class ProvisionTests(unittest.TestCase):
 
     def run_fake(self):
         return p.provision(self.cli, self.env, self.store)
+
+    def test_root_network_keeps_instance_and_boot_in_target_compartment(self):
+        self.cli.network_compartment = self.env["OCI_TENANCY_OCID"]
+        self.assertTrue(self.run_fake().startswith("CREATED"))
+        payload = self.cli.launches[0][0]
+        self.assertEqual(payload["compartmentId"], self.env["OCI_COMPARTMENT_OCID"])
+        self.assertEqual(payload["subnetId"], self.env["OCI_SUBNET_OCID"])
+        self.assertTrue(payload["assignPublicIp"])
+        self.assertEqual(payload["shapeConfig"], {"ocpus": 2, "memoryInGBs": 12})
+        self.assertEqual(payload["sourceDetails"]["bootVolumeSizeInGBs"], 50)
+        self.assertIn(("network", "security-list", "get", "--security-list-id",
+                       "ocid1.securitylist.oc1.eu-paris-1.test"), self.cli.calls)
+
+    def test_foreign_network_compartment_never_launches_or_writes_state(self):
+        self.cli.network_compartment = "ocid1.compartment.oc1..unapproved"
+        with self.assertRaises(p.Unsafe):
+            self.run_fake()
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
+
+    def test_root_network_rejects_wrong_id_names_states_and_associations(self):
+        cases = {
+            ("network", "subnet", "get"): [
+                {"id": "ocid1.subnet.oc1.eu-paris-1.wrong"}, {"display-name": "wrong"},
+                {"lifecycle-state": "TERMINATING"}, {"prohibit-public-ip-on-vnic": True},
+                {"route-table-id": ""}, {"vcn-id": ""}, {"security-list-ids": []},
+                {"security-list-ids": ["ocid1.securitylist.x"] * 2}],
+            ("network", "vcn", "get"): [
+                {"id": "ocid1.vcn.wrong"}, {"display-name": "wrong"},
+                {"lifecycle-state": "TERMINATING"}, {"compartment-id": "ocid1.compartment.foreign"}],
+            ("network", "route-table", "get"): [
+                {"id": "ocid1.routetable.wrong"}, {"vcn-id": "ocid1.vcn.wrong"},
+                {"lifecycle-state": "TERMINATING"}, {"compartment-id": "ocid1.compartment.foreign"},
+                {"route-rules": []}, {"route-rules": [{"destination":"0.0.0.0/0",
+                    "destination-type":"CIDR_BLOCK","network-entity-id":"ocid1.natgateway.x"}]}],
+            ("network", "internet-gateway", "get"): [
+                {"id": "ocid1.internetgateway.wrong"}, {"display-name": "wrong"},
+                {"is-enabled": False}, {"vcn-id": "ocid1.vcn.wrong"},
+                {"lifecycle-state": "TERMINATING"}, {"compartment-id": "ocid1.compartment.foreign"}],
+            ("network", "security-list", "get"): [
+                {"id": "ocid1.securitylist.wrong"}, {"vcn-id": "ocid1.vcn.wrong"},
+                {"lifecycle-state": "TERMINATING"}, {"compartment-id": "ocid1.compartment.foreign"},
+                {"ingress-security-rules": None}, {"egress-security-rules": None}]
+        }
+        for command, changes in cases.items():
+            for change in changes:
+                with self.subTest(command=command, change=change):
+                    self.cli = FakeCLI(self.env)
+                    self.cli.network_compartment = self.env["OCI_TENANCY_OCID"]
+                    self.store = MemoryState()
+                    original = self.cli.call(*command)
+                    self.cli.overrides[command] = dict(original, **change)
+                    with self.assertRaises(p.Unsafe):
+                        self.run_fake()
+                    self.assertFalse(self.cli.launches)
+                    self.assertFalse(self.store.history)
+
+    def test_root_network_permission_error_remains_a_real_failure(self):
+        self.cli.network_compartment = self.env["OCI_TENANCY_OCID"]
+        self.cli.overrides[("network", "security-list", "get")] = p.OCIError("NotAuthorizedOrNotFound")
+        with self.assertRaises(p.OCIError):
+            self.run_fake()
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
 
     def test_no_capacity_is_clean_and_only_one_attempt(self):
         self.cli.launch_result = p.OCIError("InternalError", capacity=True)

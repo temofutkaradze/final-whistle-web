@@ -1,6 +1,7 @@
-# Oracle A1 capacity automation - prepared, NOT activated
+# Oracle A1 capacity automation
 
-Local preparation only. No OCI calls, GitHub state writes, cloud creation, push or activation were performed.
+The workflow is deployed; runtime status is determined from Actions and the durable issue, not this document.
+The configured schedule is */10 * * * * and the activation variable remains the operator-controlled gate.
 
 Files: [workflow](../.github/workflows/oracle-a1.yml), [provisioner](../scripts/oci/provision_a1.py), [mock tests](../scripts/oci/test_provision_a1.py).
 
@@ -11,6 +12,14 @@ Only eu-paris-1 / hsNq:EU-PARIS-1-AD-1 / final-whistle-servers / VM.Standard.A1.
 Paris must be the ready home region. Root and compartment availability must both be readable; root regional A1 used+available must establish enforced ceilings <=2 OCPU/12 GB with enough remaining allocation. AD compute headroom and <=200 GB root block-storage envelope are required. Unknown, unlimited, excessive or insufficient limits fail closed. Limits are not a billing guarantee; live tenancy eligibility/IAM remain unverified.
 
 The first cloud operation lists instances, then a second list immediately precedes launch. Any nonterminated Final Whistle name/tag prevents creation, including STOPPED and TERMINATING. Exactly one launch per workflow attempt; OCI automatic retries disabled. Existing resources are never changed.
+
+## Existing cross-compartment network
+
+The VM (and its new 50 GB boot volume) remains in final-whistle-servers. The configured public subnet and its existing VCN, route table, Internet Gateway and security lists may instead belong to the configured tenancy root. Only that root or the VM compartment is accepted; arbitrary third compartments are rejected.
+
+Subnet ID must match OCI_SUBNET_OCID, and all existing network resources must have the expected identity/VCN association, the subnet's network compartment and AVAILABLE state. Known names remain final-whistle-public-subnet, final-whistle-vcn and final-whistle-igw. The default IPv4 route must lead to the enabled Internet Gateway. Referenced security lists are read and verified, never rewritten. Existing firewall rules are preserved; successful creation does not prove SSH/application reachability.
+
+The API identity needs network read/use permissions in the network compartment in addition to compute/boot-volume permissions in final-whistle-servers. This is a read-only verification of existing networking; no network is moved, recreated or modified. Image identity/architecture, Always Free envelopes, exact sizing and all durable-state safeguards are unchanged.
 
 ## Durable safety record
 
@@ -72,7 +81,7 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 py -3 -m unittest discover -s scripts/oci -p "test_*.py" -v
 ~~~
 
-34 mock-only tests passed, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
+43 mock-only tests passed, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
 
 Pinned CLI 3.96.0 launch option source was inspected offline during preparation. Full Windows CLI installation hit long-path limitations; GitHub uses Ubuntu. No live GitHub issue/API/IAM/OCI/billing validation has been performed.
 
