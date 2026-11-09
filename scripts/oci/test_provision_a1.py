@@ -74,8 +74,6 @@ class FakeCLI:
         self.launches = []
         self.launch_result = instance("PROVISIONING")
         self.limits = {
-            "standard-a1-core-regional-count": {"used": 0, "available": 2},
-            "standard-a1-memory-regional-count": {"used": 0, "available": 12},
             "standard-a1-core-count": {"used": 0, "available": 2},
             "standard-a1-memory-count": {"used": 0, "available": 12},
             "total-storage-gb": {"used": 100, "available": 100},
@@ -221,6 +219,25 @@ class ProvisionTests(unittest.TestCase):
         self.assertFalse(self.cli.launches)
         self.assertFalse(self.store.history)
 
+    def test_real_a1_limit_ids_scope_and_root_ceiling_are_preserved(self):
+        self.run_fake()
+        calls = [args for args in self.cli.calls if args[:3] ==
+                 ("limits", "resource-availability", "get") and
+                 args[args.index("--service-name") + 1] == "compute"]
+        self.assertEqual(len(calls), 4)
+        self.assertEqual({args[args.index("--limit-name") + 1] for args in calls},
+                         {"standard-a1-core-count", "standard-a1-memory-count"})
+        for args in calls:
+            self.assertEqual(args[args.index("--availability-domain") + 1], p.AD)
+        for name, excessive in (("standard-a1-core-count", 3), ("standard-a1-memory-count", 13)):
+            self.cli = FakeCLI(self.env)
+            self.store = MemoryState()
+            self.cli.limits[name] = {"used": 0, "available": excessive}
+            with self.assertRaises(p.Unsafe):
+                self.run_fake()
+            self.assertFalse(self.cli.launches)
+            self.assertFalse(self.store.history)
+
     def test_no_capacity_is_clean_and_only_one_attempt(self):
         self.cli.launch_result = p.OCIError("InternalError", capacity=True)
         self.assertTrue(self.run_fake().startswith("NO_CAPACITY"))
@@ -323,10 +340,10 @@ class ProvisionTests(unittest.TestCase):
 
     def test_insufficient_or_unbounded_free_limits_fail(self):
         for name, value in (
-            ("standard-a1-core-regional-count", {"used": 0, "available": 1}),
-            ("standard-a1-memory-regional-count", {"used": 0, "available": 11}),
+            ("standard-a1-core-count", {"used": 0, "available": 1}),
+            ("standard-a1-memory-count", {"used": 0, "available": 11}),
             ("total-storage-gb", {"used": 151, "available": 49}),
-            ("standard-a1-core-regional-count", {"used": 0, "available": 24}),
+            ("standard-a1-core-count", {"used": 0, "available": 24}),
             ("total-storage-gb", {"used": 0, "available": 10000}),
             ("standard-a1-core-count", {"available": 2}),
             ("standard-a1-memory-count", {"used": False, "available": 12}),
