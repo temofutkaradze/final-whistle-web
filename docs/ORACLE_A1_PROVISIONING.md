@@ -65,6 +65,36 @@ Subnet ID must match OCI_SUBNET_OCID, and all existing network resources must ha
 
 The API identity needs network read/use permissions in the network compartment in addition to compute/boot-volume permissions in final-whistle-servers. This is a read-only verification of existing networking; no network is moved, recreated or modified. Image identity/architecture, separate allocation restrictions and the closed billing interlock, exact sizing and all durable-state safeguards are unchanged.
 
+## Read-only eligibility audit (PR #16)
+
+[audit_a1.py](../scripts/oci/audit_a1.py) is a standalone evidence collector. It does not import the provisioner, call its billing interlock, access Issue #11 or perform any cloud writes. It always reports zero_cost_eligibility: UNVERIFIED. An exit code of 0 means the enumerated reads completed, NOT that free billing was established; exit 2 means missing/partial/ambiguous evidence or an operational failure.
+
+The existing workflow now has an optional boolean workflow_dispatch input audit_only (default false). With audit_only=true the provisioning job is unconditionally excluded regardless of OCI_A1_PROVISIONING_ENABLED. The separate audit job has contents:read only, no issue-write permission and no safety-state token passed to its script. Scheduled runs retain exactly */10 * * * * and their existing provisioning enable gate. Running the audit does not enable provisioning or bypass its closed billing interlock.
+
+After the branch is pushed, select the existing Oracle workflow, choose branch fix/oci-free-allocation-accounting, and set audit_only=true. Do not supply reconciliation inputs. The audit uses the existing OCI identity and secrets; IAM scope is not elevated or changed. It installs the already-pinned oci-cli dependency (SDK 2.190.0) and calls only the explicit read SDK allowlist. Usage API requests use HTTP POST to query summaries; they do not change billing or resources. No Work Request API is called.
+
+Evidence collection:
+
+- Enumerate root plus nested compartments using access_level=ANY and compartment_id_in_subtree=true, then attempt reads in each. Inspect every READY subscribed region and its ADs. Listing succeeds only for enumerable scopes; even a successful list is not a proof of full tenancy permissions. Denied compartments are recorded as partial coverage, never silently treated as empty.
+- List A1 VM/bare-metal instances and boot/block volumes independently of attachments and instance lifetime. Retained and detached volumes are included in the volume lists. ATTACHED/ATTACHING/DETACHING are distinguished from UNATTACHED; failed attachment reads yield UNKNOWN. Unknown metadata is reported, not replaced with a zero-size assumption. The inventory is not a historical usage ledger or an atomic snapshot.
+- Query target-region root/target service usage/headroom separately in every enumerated AD. A response of 41 available cores remains ordinary admission information and is explicitly marked not a billing entitlement.
+- Query tenancy-level unfiltered USAGE and COST summaries grouped by SKU, unit and region, from calendar-month start to the last completed UTC midnight. This is an explicit observation window, not a verified subscription billing/reset period. Quantities/costs are kept separate by exact unit and currency; absent rows, missing fields, negative/corrective or forecast ambiguity and permission errors never become proof of zero consumption. No remaining-free balance is calculated from delayed reports.
+- Boot-volume metadata can confirm observed size and base/auto-tuned VPU settings; the official model has no property that proves future free capacity AND performance billing. Matching 50 GB/10 VPU, a free capacity SKU, existing zero-cost records and an estimator are not sufficient to classify a new volume as free. Complete storage allocation and the subscription's capacity/performance treatment remain necessary.
+
+The JSON report hashes resource/compartment IDs and excludes names, account identifiers, subscription IDs, tags, credentials, response bodies and private keys. It records observed footprint, coverage failures, per-SKU usage/cost evidence and missing billing prerequisites. A redacted artifact oracle-a1-read-only-audit is retained seven days, including when some reads fail. No generated report is committed. Do not upload the original rate-card CSV to Git.
+
+Pagination is explicit for every supported response and fails on repeated/missing tokens or malformed pages. Limits: 100 pages per operation, 20,000 items across the entire audit, 2,000 read calls, 200 compartments, 40 regions, 10 ADs per region, 200 cached clients, a six-minute read budget and SDK connection/read timeouts of 10/60 seconds with automatic retries disabled. Budget exhaustion is partial coverage, not approval.
+
+For an already provisioned read-only local environment (do not put secrets into terminal history):
+
+~~~powershell
+py -3 scripts/oci/audit_a1.py --execute --output "$env:TEMP\final-whistle-oci-audit.json"
+~~~
+
+The command requires OCI_REGION, OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_PRIVATE_KEY and OCI_COMPARTMENT_OCID from a privately prepared process environment. It refuses to overwrite an existing report. No local OCI configuration was available during preparation, so live verification uses the isolated audit-only workflow if GitHub permits branch dispatch.
+
+Tests explicitly prohibit real HTTP/subprocess calls. They cover nested scopes/regions/ADs, unattached volume enumeration, partial permissions, missing metadata, later-page failures, repeated tokens, budgets, ambiguous/zero billing and workflow job exclusivity. The production billing interlock and downstream state-machine tests are unchanged.
+
 ## Durable safety record
 
 A dedicated, manually initialized GitHub issue is the durable record. It is NOT an Actions cache, expiring artifact, run conclusion, or immediately preceding-run check. Only the issue body is updated; no commits, new branches, cloud storage, extra secrets or paid services are needed.
@@ -125,7 +155,7 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 py -3 -m unittest discover -s scripts/oci -p "test_*.py" -v
 ~~~
 
-54 mock-only tests passed locally for this proposal, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
+74 mock-only tests passed locally for this proposal, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
 
 Pinned CLI 3.96.0 launch option source was inspected offline during preparation. Full Windows CLI installation hit long-path limitations; GitHub uses Ubuntu. Earlier deployed runs exercised GitHub and OCI reads; this proposal makes no live OCI calls and does not claim verified billing eligibility.
 
