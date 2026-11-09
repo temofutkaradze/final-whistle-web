@@ -9,9 +9,36 @@ Files: [workflow](../.github/workflows/oracle-a1.yml), [provisioner](../scripts/
 
 Only eu-paris-1 / hsNq:EU-PARIS-1-AD-1 / final-whistle-servers / VM.Standard.A1.Flex / 2 OCPU / 12 GB RAM / 50 GB boot / 10 VPU balanced storage. Existing final-whistle-vcn, final-whistle-public-subnet and Internet Gateway only; official Canonical Ubuntu 24.04 aarch64 platform image. No paid shape fallback, extra volumes, network creation or application deployment.
 
-Paris must be the ready home region. Root and compartment availability must both be readable; root A1 used+available must establish enforced ceilings <=2 OCPU/12 GB with enough remaining allocation. The actual A1 limits are standard-a1-core-count and standard-a1-memory-count, both AD-scoped.
-Because Paris is verified to have exactly the expected one AD, the root AD ceiling is also the regional ceiling.
-Both root and target headroom and the <=200 GB root block-storage envelope are required. Unknown, unlimited, excessive or insufficient limits fail closed. A failed Limits lookup logs only relevant catalog names/scopes and command/error categories, never credentials or response bodies; diagnostics cannot authorize a launch. Limits are not a billing guarantee; live tenancy eligibility/IAM remain unverified.
+Paris must be the ready home region. Root and target service/quota headroom must both be readable. The A1 limit IDs are standard-a1-core-count and standard-a1-memory-count (AD-scoped); Paris is currently restricted to exactly the expected one AD. These are admission limits, NOT a billing entitlement.
+
+**Always Free eligibility correction is BLOCKED, not complete.** The existing conservative launch restriction remains in place. The 2/12 compute and 200 GB storage checks are not proof of free billing, even when they pass. Large headroom (for example used=0, available=41) is valid service-limit data; it is not 41 free OCPUs and it is not permission to launch. The diagnostic now identifies this unresolved billing boundary instead of claiming an enforced Always Free ceiling. Do not merge this change expecting it to unblock provisioning.
+
+Unknown, malformed or insufficient headroom fails closed. Failed Limits lookups emit only allowlisted catalog metadata and safe command/error categories, never credentials or response bodies. No eligibility override, larger free ceiling, new repository variable, IAM change, or cloud modification is introduced.
+
+### Why replacing the condition with used + requested <= 4 is unsafe
+
+Reviewed on 2026-11-09:
+
+- [Oracle ResourceAvailability](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/limits/models/oci.limits.models.ResourceAvailability.html) describes current usage, service/quota availability and an optional effective quota. It does not report free billing entitlement or already consumed monthly free hours. Rounded values and missing/ambiguous data must not silently become zero.
+- [Oracle Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm) currently lists 1,500 OCPU-hours and 9,000 GB-hours per month (2 OCPUs/12 GB continuously), while [Arm-Based Compute](https://docs.oracle.com/en-us/iaas/Content/Compute/References/arm.htm) still lists 3,000/18,000. The requested 4/24 maximum must not be substituted for verified tenancy terms. The existing stricter 2/12 restriction is retained pending that verification.
+- [Oracle's price list](https://www.oracle.com/cloud/price-list/) describes the paid-tenancy A1 free usage pool as shared by virtual machines, bare metal and container instances. A VM-only inventory in one compartment is not sufficient evidence.
+- [Cost Analysis](https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/costanalysisoverview.htm) can lag up to 48 hours. [Cost Reports](https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/costusagereportsoverview.htm) can lag up to 24 hours and receive corrections. Empty/zero reports cannot prove unused current-month entitlement. Terminated, resized or moved resources can have consumed monthly hours despite being absent from the current inventory.
+- Trial credit availability is not Always Free eligibility. Service headroom and even a real hard quota constrain provisioning, not the accumulated month's bill. Budgets are alerts, not an atomic launch/billing guard.
+
+### Remaining prerequisite and safe implementation design
+
+No reliable automated entitlement proof was established from the currently queried APIs. Therefore the requested fail-closed fallback applies: preserve the launch restriction rather than deleting it or pretending usage arithmetic guarantees free billing.
+
+Before implementing a launch-enabling change:
+
+1. Obtain tenancy-specific confirmation of current A1 and storage eligibility, the applicable monthly pools and their scope from Oracle billing/subscription information or Support. Confirm the account remains on the intended plan; do not upgrade it. Resolve the conflicting 2/12 and 4/24 documentation. Do not put credentials, customer identifiers or billing exports in Git.
+2. Establish complete resource visibility and accounting across root and all nested compartments and applicable regions/ADs, including A1 VMs, shared-meter bare-metal/container consumers, stopped/provisioning/terminating states, capacity reservations and retained boot/block volumes. Preserve existing duplicate checks; missing permissions, omitted pages, unknown states or unsupported consumers must block. Do not assume the current target-compartment list is this inventory or that a root usage number proves its completeness.
+3. Separate service admission (remaining >= requested in every applicable scope) from aggregate allocation (existing + requested <= the verified free policy, never above the requested 4 OCPU/24 GB maximum). Retain exact A1.Flex 2/12 and 50 GB launch sizing and the combined 200 GB home-region boot/block envelope. Use the stricter applicable entitlement when lower. Do not count a reservation and its occupied instance twice or ignore unoccupied reservations.
+4. Establish a conservative current-month consumption bound, including terminated/resized consumers and unreported usage, plus projected consumption for the intended runtime. An estimate based only on current instances or delayed reports is insufficient. This needs an independently reviewed accounting/enforcement design, not an automatic approval flag. If reliable bounds cannot be established, keep provisioning blocked.
+5. Document how concurrent external provisioning is prevented or bounded by real enforcement across the relevant scopes. The GitHub concurrency lock protects this workflow only. Recheck admissibility immediately before the durable pending write; retain unchanged fail-closed handling of ambiguous launches.
+6. Review/test the resulting accounting implementation separately before any launch-enabling merge. No old Work Request polling or cancellation requirement is added by this proposal.
+
+The additional tests are **characterization/safety regressions**, not successful billing verification: 41-headroom is valid admission data in isolation, unproven launches remain blocked without issue writes, existing/exhausted allocation and malformed usage fail closed, and root headroom does not bypass an exhausted target quota.
 
 The first cloud operation lists instances, then a second list immediately precedes launch. Any nonterminated Final Whistle name/tag prevents creation, including STOPPED and TERMINATING. Exactly one launch per workflow attempt; OCI automatic retries disabled. Existing resources are never changed.
 
@@ -21,7 +48,7 @@ The VM (and its new 50 GB boot volume) remains in final-whistle-servers. The con
 
 Subnet ID must match OCI_SUBNET_OCID, and all existing network resources must have the expected identity/VCN association, the subnet's network compartment and AVAILABLE state. Known names remain final-whistle-public-subnet, final-whistle-vcn and final-whistle-igw. The default IPv4 route must lead to the enabled Internet Gateway. Referenced security lists are read and verified, never rewritten. Existing firewall rules are preserved; successful creation does not prove SSH/application reachability.
 
-The API identity needs network read/use permissions in the network compartment in addition to compute/boot-volume permissions in final-whistle-servers. This is a read-only verification of existing networking; no network is moved, recreated or modified. Image identity/architecture, Always Free envelopes, exact sizing and all durable-state safeguards are unchanged.
+The API identity needs network read/use permissions in the network compartment in addition to compute/boot-volume permissions in final-whistle-servers. This is a read-only verification of existing networking; no network is moved, recreated or modified. Image identity/architecture, existing conservative allocation restrictions, exact sizing and all durable-state safeguards are unchanged.
 
 ## Durable safety record
 
@@ -83,13 +110,14 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 py -3 -m unittest discover -s scripts/oci -p "test_*.py" -v
 ~~~
 
-44 mock-only tests passed, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
+51 mock-only tests passed locally for this proposal, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
 
-Pinned CLI 3.96.0 launch option source was inspected offline during preparation. Full Windows CLI installation hit long-path limitations; GitHub uses Ubuntu. No live GitHub issue/API/IAM/OCI/billing validation has been performed.
+Pinned CLI 3.96.0 launch option source was inspected offline during preparation. Full Windows CLI installation hit long-path limitations; GitHub uses Ubuntu. Earlier deployed runs exercised GitHub and OCI reads; this proposal makes no live OCI calls and does not claim verified billing eligibility.
 
 References:
 - [Oracle Always Free](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
 - [OCI retry tokens](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/client/oci.core.ComputeClient.html)
 - [GitHub issue updates](https://docs.github.com/en/rest/issues/issues#update-an-issue)
 - [GitHub concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
-\nLimit identifiers and AD scope are based on [Oracle Compute Quotas](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/resourcequotas_topic-Compute_Quotas.htm). Invented regional limit names must not be restored. Numeric usage/headroom diagnostics contain no credentials.\n
+
+Limit identifiers and AD scope are based on [Oracle Compute Quotas](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/resourcequotas_topic-Compute_Quotas.htm). Invented regional limit names must not be restored. Numeric usage/headroom diagnostics contain no credentials.

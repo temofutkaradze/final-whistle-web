@@ -243,6 +243,70 @@ class ProvisionTests(unittest.TestCase):
             self.assertFalse(self.cli.launches)
             self.assertFalse(self.store.history)
 
+    def test_41_available_is_valid_service_headroom_not_billing_evidence(self):
+        self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": 41}
+        # cap=None checks service admission only; it must not be used as billing proof.
+        p.available(self.cli, self.env, "compute", "standard-a1-core-count", 2, ad=p.AD)
+        self.assertEqual(len(self.cli.calls), 2)
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
+
+    def test_unproven_free_entitlement_keeps_41_headroom_launch_blocked(self):
+        self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": 41}
+        before = self.store.read()
+        with self.assertRaisesRegex(p.Unsafe, "billing eligibility unresolved"):
+            self.run_fake()
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
+        self.assertEqual(self.store.read(), before)
+
+    def test_existing_usage_cannot_consume_reviewed_allocation_with_large_headroom(self):
+        # The current 2/12 guard is intentionally stricter than the requested
+        # 4/24 maximum while Oracle's entitlement documentation disagrees.
+        for name, used in (("standard-a1-core-count", 1),
+                           ("standard-a1-core-count", 4),
+                           ("standard-a1-memory-count", 1),
+                           ("standard-a1-memory-count", 24),
+                           ("total-storage-gb", 151)):
+            with self.subTest(limit=name, used=used):
+                self.cli = FakeCLI(self.env)
+                self.store = MemoryState()
+                self.cli.limits[name] = {"used": used, "available": 10000}
+                with self.assertRaises(p.Unsafe):
+                    self.run_fake()
+                self.assertFalse(self.cli.launches)
+                self.assertFalse(self.store.history)
+
+    def test_ambiguous_service_usage_never_establishes_headroom_or_billing(self):
+        for value in (None, {}, {"used": 0}, {"used": None, "available": 41},
+                      {"used": False, "available": 41},
+                      {"used": float("nan"), "available": 41},
+                      {"used": 0, "available": float("inf")},
+                      {"used": 0, "available": "41"},
+                      {"used": -1, "available": 41}):
+            with self.subTest(response=value):
+                self.cli = FakeCLI(self.env)
+                self.cli.limits["standard-a1-core-count"] = value
+                with self.assertRaises(p.Unsafe):
+                    p.available(self.cli, self.env, "compute", "standard-a1-core-count", 2, ad=p.AD)
+                self.assertFalse(self.cli.launches)
+                self.assertFalse(self.store.history)
+
+    def test_root_service_headroom_does_not_override_exhausted_target_quota(self):
+        original = self.cli.call
+        def scoped_call(*args):
+            if args[:3] == ("limits", "resource-availability", "get"):
+                self.cli.calls.append(args)
+                root = args[args.index("--compartment-id") + 1] == self.env["OCI_TENANCY_OCID"]
+                return {"used": 0, "available": 41 if root else 1}
+            return original(*args)
+        self.cli.call = scoped_call
+        with self.assertRaisesRegex(p.Unsafe, "Insufficient service limit/quota headroom"):
+            p.available(self.cli, self.env, "compute", "standard-a1-core-count", 2, ad=p.AD)
+        self.assertEqual(len(self.cli.calls), 2)
+        self.assertFalse(self.cli.launches)
+        self.assertFalse(self.store.history)
+
     def test_limit_failure_diagnostics_are_read_only_and_keep_gate_closed(self):
         self.cli.overrides[("limits", "resource-availability", "get")] = p.OCIError("NotAuthorizedOrNotFound")
         output = io.StringIO()

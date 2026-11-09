@@ -389,7 +389,9 @@ def diagnose_limit_catalog(cli, env, service, limit, ad):
 
 
 def available(cli, env, service, limit, amount, cap=None, ad=None):
-    # Root usage/headroom prevents counting just this compartment's free allocation.
+    # Service headroom is not a billing entitlement. Keep the existing conservative
+    # launch restriction until tenancy entitlement and complete metered usage can
+    # be established separately; even a small service limit is not billing proof.
     scopes = [env["OCI_TENANCY_OCID"], env["OCI_COMPARTMENT_OCID"]]
     for i, compartment in enumerate(scopes):
         args = ["limits", "resource-availability", "get", "--compartment-id", compartment,
@@ -407,7 +409,7 @@ def available(cli, env, service, limit, amount, cap=None, ad=None):
         require(remaining >= amount, "Insufficient service limit/quota headroom")
         if i == 0 and cap is not None:
             require(used + amount <= cap and used + remaining <= cap,
-                    "Cannot prove an enforced Always Free allocation ceiling")
+                    "Always Free billing eligibility unresolved; service-limit headroom is not a free allocation")
 
 
 def matching_instance(items):
