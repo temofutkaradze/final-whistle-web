@@ -29,6 +29,10 @@ class Fake:
             if isinstance(result, Exception):
                 raise result
             return result(op, region, args) if callable(result) else result
+        if op == "subscriptions":
+            return a.Page({"items": [{"id": "subscription-test", "plan_type": "FREE_TIER"}]})
+        if op == "subscription":
+            return a.Page({"id": "subscription-test", "plan_type": "FREE_TIER"})
         if op == "regions":
             return a.Page([{"region_name": a.REGION, "is_home_region": True, "status": "READY"},
                            {"region_name": "eu-frankfurt-1", "is_home_region": False, "status": "READY"}])
@@ -249,6 +253,7 @@ class AuditTests(unittest.TestCase):
                 return types.SimpleNamespace(data=[], headers={}, status=200)
         sdk = types.SimpleNamespace(config=types.SimpleNamespace(validate_config=lambda c: None),
             identity=types.SimpleNamespace(IdentityClient=Client),
+            osp_gateway=types.SimpleNamespace(SubscriptionServiceClient=Client),
             core=types.SimpleNamespace(ComputeClient=Client, BlockstorageClient=Client),
             limits=types.SimpleNamespace(LimitsClient=Client), usage_api=types.SimpleNamespace(UsageapiClient=Client),
             retry=types.SimpleNamespace(NoneRetryStrategy=lambda: "NONE"),

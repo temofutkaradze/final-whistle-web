@@ -17,6 +17,8 @@ SKUS = {"B93297", "B93298", "B91445", "B91961", "B91962"}
 # Fixed SDK allowlist: Usage API POST is a read-only query, not a resource write.
 OPERATIONS = {
     "regions": ("identity", "list_region_subscriptions", "list"),
+    "subscriptions": ("subscription", "list_subscriptions", "items"),
+    "subscription": ("subscription", "get_subscription", "object"),
     "compartments": ("identity", "list_compartments", "list"),
     "domains": ("identity", "list_availability_domains", "list"),
     "instances": ("compute", "list_instances", "list"),
@@ -122,7 +124,8 @@ class SDKBackend:
                            "compute": self.oci.core.ComputeClient,
                            "block": self.oci.core.BlockstorageClient,
                            "limits": self.oci.limits.LimitsClient,
-                           "usage": self.oci.usage_api.UsageapiClient}
+                           "usage": self.oci.usage_api.UsageapiClient,
+                           "subscription": self.oci.osp_gateway.SubscriptionServiceClient}
                 self.clients[key] = classes[family](dict(self.config, region=region),
                     timeout=(10, 60), retry_strategy=self.oci.retry.NoneRetryStrategy())
             args = dict(args)
@@ -183,6 +186,31 @@ class Audit:
             result.append(row)
         return result
 
+    def subscription(self):
+        # Subscription data includes payment/address PII. Export only enums, never
+        # the source objects or subscription identifiers into reports or logs.
+        self.report["subscription"] = {"plan_type": "UNVERIFIED", "verified": False}
+        rows = self.read("subscriptions", osp_home_region=REGION, compartment_id=self.tenancy)
+        if rows is None:
+            return
+        if len(rows) != 1 or not isinstance(rows[0].get("id"), str) or not rows[0]["id"]:
+            self.error("subscriptions", "subscription", "missing_or_ambiguous_subscription")
+            return
+        summary = rows[0]
+        detail = self.read("subscription", subscription_id=summary["id"],
+                           osp_home_region=REGION, compartment_id=self.tenancy)
+        if detail is None:
+            return
+        if (detail.get("id") != summary["id"] or summary.get("plan_type") != "FREE_TIER"
+                or detail.get("plan_type") != "FREE_TIER"
+                or detail.get("time_plan_upgrade") is not None
+                or summary.get("time_plan_upgrade") is not None
+                or detail.get("upgrade_state") not in (None, "PROMO")
+                or summary.get("upgrade_state") not in (None, "PROMO")):
+            self.error("subscription", "subscription", "non_free_or_conflicting_subscription")
+            return
+        self.report["subscription"] = {"plan_type": "FREE_TIER", "verified": True}
+
     def inventory(self):
         compartments = self.read("compartments", compartment_id=self.tenancy,
                                  compartment_id_in_subtree=True, access_level="ANY")
@@ -190,6 +218,8 @@ class Audit:
         for comp in self.unique(compartments, "id", "compartments"):
             if comp["id"] != self.tenancy:
                 ids.append(comp["id"])
+        if self.target not in ids:
+            self.error("compartments", "target", "target_missing_from_subtree_inventory")
         if len(ids) > 200:
             raise AuditError("compartment_budget_exhausted")
         self.report["compartments"] = [ref(x) for x in ids]
@@ -360,6 +390,7 @@ class Audit:
                 self.error("usage", query, "target_skus_absent_NOT_zero_usage", query=query)
 
     def run(self):
+        self.subscription()
         try:
             self.inventory()
         except AuditError as error:

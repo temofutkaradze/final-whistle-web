@@ -159,7 +159,7 @@ class ProvisionTests(unittest.TestCase):
         # Isolate existing launch/state-machine tests from the deliberately closed
         # billing interlock. These mocks are NOT live eligibility verification.
         # The unmocked interlock is tested through the full provision path below.
-        self.billing = patch("provision_a1.require_zero_cost_billing_evidence")
+        self.billing = patch("provision_a1.require_free_tier_launch_safety")
         self.billing.start()
         self.addCleanup(self.billing.stop)
 
@@ -266,7 +266,7 @@ class ProvisionTests(unittest.TestCase):
                 self.store = MemoryState()
                 self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": headroom}
                 before = self.store.read()
-                with self.assertRaisesRegex(p.Unsafe, "Zero-cost billing evidence incomplete"):
+                with self.assertRaisesRegex(p.Unsafe, "Free Tier evidence unavailable"):
                     self.run_fake()
                 self.assertEqual(self.cli.lists, 2)
                 self.assertEqual(sum(c[:3] == ("limits", "resource-availability", "get")
@@ -291,7 +291,7 @@ class ProvisionTests(unittest.TestCase):
     def test_billing_interlock_has_no_environment_or_rate_card_override(self):
         self.billing.stop()
         self.env.update(OCI_A1_FREE_ELIGIBLE="true", OCI_A1_BILLING_VERIFIED="true", OCI_A1_PROVISIONING_ENABLED="true")
-        with self.assertRaisesRegex(p.Unsafe, "Zero-cost billing evidence incomplete"):
+        with self.assertRaisesRegex(p.Unsafe, "Free Tier evidence unavailable"):
             self.run_fake()
         self.assertFalse(self.cli.launches)
         self.assertFalse(self.store.history)

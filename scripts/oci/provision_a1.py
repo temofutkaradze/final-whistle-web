@@ -15,6 +15,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+import free_tier_safety
+
 REGION = "eu-paris-1"
 AD = "hsNq:EU-PARIS-1-AD-1"
 SHAPE = "VM.Standard.A1.Flex"
@@ -420,13 +422,15 @@ def allocation_ceiling(usage, amount, ceiling):
             "Observed resource usage exceeds the configured allocation ceiling")
 
 
-def require_zero_cost_billing_evidence():
-    # Deliberate launch interlock, not a fake billing verifier. The dated rate card
-    # establishes prices but the current APIs do not establish complete monthly
-    # consumption, boot-volume billing classification, or post-trial terms.
-    # No env/input override: implementing a real verifier requires separate review.
-    raise Unsafe("Zero-cost billing evidence incomplete: monthly consumption, "
-                 "boot-volume capacity/performance eligibility and rate validity require verification; no launch")
+def require_free_tier_launch_safety(env, payload):
+    try:
+        report = free_tier_safety.collect(env)
+        result = free_tier_safety.assess(report, payload, env)
+    except Exception:
+        # Do not print SDK exceptions: they may contain account/payment data.
+        raise Unsafe("Free Tier evidence unavailable; no launch or state write") from None
+    require(result["launch_authorized"],
+            "Free Tier safety blocked: " + "; ".join(result["blockers"]))
 
 
 def matching_instance(items):
@@ -535,24 +539,16 @@ def provision(cli, env, store=None):
             "A1 image/shape compatibility not established")
     # A1 limits are AD-scoped. Paris was verified to contain exactly this AD,
     # so its root envelope is also the regional envelope; no invented regional IDs.
-    allocation_ceiling(available(cli, env, "compute", "standard-a1-core-count", 2, AD), 2, 4)
-    allocation_ceiling(available(cli, env, "compute", "standard-a1-memory-count", 12, AD), 12, 24)
+    allocation_ceiling(available(cli, env, "compute", "standard-a1-core-count", 2, AD), 2, 2)
+    allocation_ceiling(available(cli, env, "compute", "standard-a1-memory-count", 12, AD), 12, 12)
     allocation_ceiling(available(cli, env, "block-storage", "total-storage-gb", 50, AD), 50, 200)
     # Recheck immediately before launch; external operators must not provision in parallel.
     if matching_instance(cli.call("compute", "instance", "list", "--compartment-id", compartment, "--all")):
         return "EXISTS: discovered during preflight; no launch"
-    # Must fail before any durable pending write or OCI launch. Neither the rate
-    # card, allocation ceilings, service limits nor an estimator is billing proof.
-    require_zero_cost_billing_evidence()
-    payload = {
-        "availabilityDomain": AD, "compartmentId": compartment, "displayName": NAME,
-        "shape": SHAPE, "shapeConfig": {"ocpus": 2, "memoryInGBs": 12},
-        "subnetId": env["OCI_SUBNET_OCID"], "assignPublicIp": True,
-        "sourceDetails": {"sourceType": "image", "imageId": env["OCI_IMAGE_OCID"],
-                          "bootVolumeSizeInGBs": 50, "bootVolumeVpusPerGB": 10},
-        "metadata": {"ssh_authorized_keys": env["OCI_SSH_PUBLIC_KEY"].strip()},
-        "freeformTags": TAG,
-    }
+    payload = free_tier_safety.launch_payload(env)
+    # Account-plan/inventory/quota evidence is checked before pending is written.
+    # Missing billing evidence remains a block, never an environment override.
+    require_free_tier_launch_safety(env, payload)
     # Durable write/read-back precedes the only side-effecting OCI request.
     pending = begin_attempt(store, record, env)
     token = pending["token"]
