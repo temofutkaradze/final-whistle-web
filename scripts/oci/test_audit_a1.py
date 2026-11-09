@@ -254,7 +254,7 @@ class AuditTests(unittest.TestCase):
         sdk = types.SimpleNamespace(config=types.SimpleNamespace(validate_config=lambda c: None),
             identity=types.SimpleNamespace(IdentityClient=Client),
             osp_gateway=types.SimpleNamespace(SubscriptionServiceClient=Client),
-            core=types.SimpleNamespace(ComputeClient=Client, BlockstorageClient=Client),
+            core=types.SimpleNamespace(ComputeClient=Client, BlockstorageClient=Client, VirtualNetworkClient=Client),
             limits=types.SimpleNamespace(LimitsClient=Client), usage_api=types.SimpleNamespace(UsageapiClient=Client),
             retry=types.SimpleNamespace(NoneRetryStrategy=lambda: "NONE"),
             exceptions=types.SimpleNamespace(ServiceError=type("ServiceError", (Exception,), {})),
@@ -287,8 +287,9 @@ class AuditTests(unittest.TestCase):
         self.assertIn("if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.audit_only) }}", audit_job)
         self.assertNotIn("provision_a1.py --execute", audit_job)
         self.assertNotIn("issues: write", audit_job)
-        self.assertNotIn("GITHUB_TOKEN", audit_job)
-        self.assertIn("audit_a1.py --execute", audit_job)
+        self.assertIn("issues: read", audit_job)
+        self.assertIn("GITHUB_TOKEN: ${{ github.token }}", audit_job)
+        self.assertIn("audit_activation.py --execute", audit_job)
 
 
 if __name__ == "__main__":

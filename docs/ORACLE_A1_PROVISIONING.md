@@ -299,3 +299,84 @@ remain. No actual launch or zero-cost eligibility is claimed by passing tests.
 - [Subscription read API](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/osp_gateway/client/oci.osp_gateway.SubscriptionServiceClient.html)
 - [Balanced default and VPU pricing distinction](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/blockvolumeperformance.htm)
 - [Full compartment subtree parameters](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/iam/compartment/list.html)
+
+
+## Complete read-only activation audit (PR after #23)
+
+PR #23 was confirmed merged into main at `0e559b9`. Work continues from that
+revision without modifying the original dirty Windows checkout.
+
+Manual Actions dispatch with **audit_only=true** now runs
+[audit_activation.py](../scripts/oci/audit_activation.py). It reuses the shared
+read-only target validator from the provisioner, through an SDK-only allowlisted
+adapter. There is no OCI CLI subprocess or call to `provision()` in this path.
+The adapter rejects launch/update/delete operations and unknown parameters before
+transport, and the SDK backend independently restricts operation names to reads.
+The only POST is the existing Usage API query, not a resource creation.
+
+The audit job has `contents:read` and **issues:read**, never issues:write. Its Issue
+reader admits only GET of the configured issue and rejects other methods/paths;
+it does not call pending/reconciliation/state-save code. Existing credentials are
+reused; subscription/payment bodies, key material, SSH keys and raw OCI errors
+are never exported. Root/compartment/resource IDs remain hashed in the artifact.
+
+The redacted report and Actions summary give PASS/BLOCKED for configuration,
+FREE_TIER subscription, home region, compartment, network associations/routing,
+Ubuntu 24.04 ARM64 image and A1 compatibility, quotas, inventory, observed A1 and
+retained-storage allocations, three usage/cost API access checks, monthly
+entitlement, Balanced pricing, external-allocation enforcement and duplicate
+state. PASS for API access or current footprint is explicitly NOT billing approval.
+Skipped downstream target checks remain BLOCKED, never fabricated PASS.
+
+The artifact remains `oracle-a1-read-only-audit`, retained seven days. A successful
+collection can have a green step while activation is BLOCKED; permission/read/
+validation failures fail the step but still preserve the report. The launch gate
+remains closed. No enabled variable, Issue schema, retry behavior or cron changes
+are needed. Audit-only dispatch excludes provisioning even if a repository
+operator later changes the enable variable. Scheduled provisioning retains its
+existing false/absent gate and shared non-cancelling concurrency.
+
+### Live evidence before this enhancement
+
+[Read-only run 42701886705](https://github.com/temofutkaradze/final-whistle-web/actions/runs/42701886705)
+ran against main with audit_only=true. Provisioning was SKIPPED. The artifact
+confirmed Paris as home region; root and target resource lists returned no A1
+instances or retained boot/block volumes. Root/target headroom was 41 OCPUs,
+277 GB memory and 30,720 GB storage, all with used=0. These are admission limits,
+not free entitlements. USAGE, USAGE_ONLY and COST all read successfully but
+returned no rows for November 1 through November 9 00:00 UTC; unused monthly
+allowance remains unverified. OSP list_subscriptions returned
+NotAuthorizedOrNotFound, so FREE_TIER account type was NOT verified.
+
+A reporting defect was found: subscription-read errors were included in the
+inventory-error count and made successful resource enumeration appear PARTIAL.
+This is corrected by counting only errors added during inventory. The subscription
+failure still blocks overall activation and fails the audit; no permission check
+or pricing requirement is relaxed.
+
+### Required operator actions ? not performed here
+
+1. Have the OCI tenancy administrator resolve the OSP subscription list/get
+   NotAuthorizedOrNotFound response for the actual API-user group and root
+   tenancy. Confirm whether this account supports the OSP interface. Oracle's
+   [Billing Tools permissions](https://docs.oracle.com/en-us/iaas/Content/Billing/Concepts/billingtoolsoverview.htm)
+   document subscription-related reads; do not assume Usage API access grants
+   OSP access or grant account/payment management just to silence a denial.
+   Validate the precise supported read policy with Oracle if needed.
+2. Obtain written Oracle confirmation applicable to this tenancy and current
+   terms for free **capacity AND 10 VPU/GB boot performance**, including post-trial
+   treatment. The [performance documentation](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/blockvolumeperformance.htm)
+   describes VPUs separately from capacity. Its zero-VPU Lower Cost tier is for
+   block volumes, **not boot volumes**; changing boot VPU to zero is not a valid
+   workaround for the requested configuration.
+3. Establish billing reset/remaining A1 consumption and a conservative reporting-
+   gap bound, plus externally enforced or conservatively bounded shared resource
+   allocation. Empty/zero usage and one inventory snapshot cannot establish these.
+4. Review this PR and the sanitized live audit before separately approving merge
+   and any eventual activation. Keep OCI_A1_PROVISIONING_ENABLED=false and Issue
+   #11 unchanged. There is no reset/attestation override for billing evidence.
+
+Local validation for the complete activation-audit change: **99 mock-only tests
+passed**, Python AST syntax passed, workflow YAML and cron/permission/concurrency
+assertions passed. No application test/build, production service or cloud write
+was needed.

@@ -71,6 +71,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      issues: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -90,8 +91,13 @@ jobs:
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
           OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_SUBNET_OCID: ${{ secrets.OCI_SUBNET_OCID }}
+          OCI_IMAGE_OCID: ${{ secrets.OCI_IMAGE_OCID }}
+          OCI_SSH_PUBLIC_KEY: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          OCI_A1_STATE_ISSUE_NUMBER: ${{ vars.OCI_A1_STATE_ISSUE_NUMBER }}
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python scripts/oci/audit_a1.py --execute --output "$RUNNER_TEMP/oracle-a1-audit.json"
+        run: python scripts/oci/audit_activation.py --execute --output "$RUNNER_TEMP/oracle-a1-audit.json"
       - name: Preserve redacted audit evidence even on partial reads
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
