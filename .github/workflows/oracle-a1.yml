@@ -3,6 +3,11 @@ name: Oracle A1 - Always Free capacity attempt
 "on":
   workflow_dispatch:
     inputs:
+      audit_only:
+        description: "READ-ONLY inventory/usage audit; never invokes provisioning or changes the safety issue"
+        required: false
+        default: false
+        type: boolean
       reconcile_token:
         description: "Reconciliation ONLY: exact pending token from the dedicated safety issue"
         required: false
@@ -27,7 +32,7 @@ concurrency:
 jobs:
   provision:
     # Absent/false means no runner or OCI call; enable only after explicit approval.
-    if: ${{ vars.OCI_A1_PROVISIONING_ENABLED == 'true' }}
+    if: ${{ vars.OCI_A1_PROVISIONING_ENABLED == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.audit_only) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -59,3 +64,39 @@ jobs:
           OCI_A1_RECONCILIATION_EVIDENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.reconciliation_evidence || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/oci/provision_a1.py --execute
+
+  audit:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.audit_only) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Mock-only audit and provisioning regression tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s scripts/oci -p 'test_*.py' -v
+      - name: Install pinned OCI SDK via existing CLI dependency
+        run: python -m pip install --disable-pip-version-check 'oci-cli==3.96.0'
+      - name: Read-only Oracle evidence audit
+        env:
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/oci/audit_a1.py --execute --output "$RUNNER_TEMP/oracle-a1-audit.json"
+      - name: Preserve redacted audit evidence even on partial reads
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-a1-read-only-audit
+          path: ${{ runner.temp }}/oracle-a1-audit.json
+          if-no-files-found: warn
+          retention-days: 7
