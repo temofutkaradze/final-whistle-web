@@ -104,6 +104,13 @@ describe("render server (fake Chromium)", () => {
       expect(r.status, t).toBe(200);
       const meta = await sharp(r.json.jpg_path).metadata();
       expect(meta, t).toMatchObject({ width: 1080, height: 1350, format: "jpeg" });
+      expect(meta.chromaSubsampling, t).toBe('4:4:4');
+      expect(meta.icc?.length, t).toBeGreaterThan(0);
+      expect(meta.exif, t).toBeUndefined();
+      // Fake Chromium supplies a flat image. The exporter must not invent
+      // texture/noise in otherwise uniform photographic pixels.
+      const rgb=await sharp(r.json.jpg_path).removeAlpha().raw().toBuffer();
+      expect(rgb.every((value,index)=>value===rgb[index%3]),t).toBe(true);
       expect(resolve(r.json.jpg_path).startsWith(join(RENDER_DIR, "output")), t).toBe(true);
       const html = readFileSync(r.json.html_path, "utf8");
       expect(html, t).not.toMatch(/\{\{[A-Z_]+\}\}/);

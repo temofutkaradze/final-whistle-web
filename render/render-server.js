@@ -14,7 +14,7 @@
 // Rendering pipeline:
 //   background (any size) -> CSS object-fit: cover inside the 1080x1350 layout
 //   -> Chromium renders at deviceScaleFactor 2 => 2160x2700 physical pixels (kept in memory)
-//   -> sharp downscales to exactly 1080x1350 (Lanczos3) -> sRGB JPEG, quality 93
+//   -> sharp downscales to exactly 1080x1350 (Lanczos3) -> tagged sRGB JPEG, quality 97
 //
 // Speed notes (none of these change the picture):
 //   * one long-lived Chromium + one shared browser context, warmed up at start-up
@@ -125,10 +125,10 @@ const FINAL_WIDTH = 1080;
 const FINAL_HEIGHT = 1350;
 const HIRES_WIDTH = FINAL_WIDTH * 2;   // 2160
 const HIRES_HEIGHT = FINAL_HEIGHT * 2; // 2700
-const JPEG_QUALITY = 93;
-// Very light monochrome grain added after the downscale to hide banding in the dark gradient.
-// 0 disables it. ~4-8 is subtle; raise only if banding is still visible.
-const GRAIN_SIGMA = 5;
+const JPEG_QUALITY = 97;
+// Preserve photographic pixels and typography. Quality comparisons found no
+// benefit sufficient to justify adding noise across the entire Match image.
+const GRAIN_SIGMA = 0;
 
 // The 2160x2700 PNG is only an in-memory step. Set to true to also save it next to the JPEG
 // (slower, uses a lot of disk space).
@@ -342,7 +342,7 @@ async function captureHiRes(page, context) {
   return page.screenshot({ type: 'png', scale: 'device', animations: 'disabled', timeout: 120000 });
 }
 
-// 2160x2700 PNG buffer -> 1080x1350 sRGB JPEG buffer (Lanczos3 downscale, light grain)
+// 2160x2700 PNG buffer -> 1080x1350 tagged sRGB JPEG buffer (Lanczos3 downscale)
 async function makeJpeg(pngBuffer, { grain = true } = {}) {
   let img = sharp(pngBuffer)
     .flatten({ background: '#000000' })          // no alpha channel in the JPEG
@@ -351,7 +351,7 @@ async function makeJpeg(pngBuffer, { grain = true } = {}) {
   if (grain && GRAIN_SIGMA > 0) {
     img = img.composite([{ input: await getGrain(), blend: 'soft-light' }]);
   }
-  return img.jpeg({ quality: JPEG_QUALITY, chromaSubsampling: '4:4:4' }).toBuffer();
+  return img.withIccProfile('srgb').jpeg({ quality: JPEG_QUALITY, chromaSubsampling: '4:4:4' }).toBuffer();
 }
 
 // Wait until web fonts and every <img> (background, logos) are loaded and decoded, and one frame was painted,

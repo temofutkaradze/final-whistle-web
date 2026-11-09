@@ -104,7 +104,7 @@ module.exports = function createNewsRenderer({
         throw new Error("Unexpected News image dimensions");
       }
 
-      // Original PNGs had no added grain. Match keeps its existing default.
+      // News never adds grain; use the shared tagged-sRGB JPEG exporter.
       const jpg = await makeJpeg(png, { grain: false });
 
       fs.mkdirSync(outputDir, { recursive: true });
