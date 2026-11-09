@@ -49,6 +49,7 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     const result=await response.json();expect(typeof result.jpg_path).toBe('string');outputs.add(result.jpg_path);
     expect(dirname(result.jpg_path)).toBe(resolve(root,'render/output'));
     const bytes=await readFile(result.jpg_path);expect(await sharp(bytes).metadata()).toMatchObject({width:1080,height:1350,format:'jpeg'});
+    const metadata=await sharp(bytes).metadata();expect(metadata.chromaSubsampling).toBe('4:4:4');expect(metadata.icc?.length).toBeGreaterThan(0);expect(metadata.exif).toBeUndefined();
     const {data,info}=await sharp(bytes).raw().toBuffer({resolveWithObject:true});
     const bottom=data.subarray((info.height-100)*info.width*info.channels);
     expect(bottom.some(value=>value>100)).toBe(true);
