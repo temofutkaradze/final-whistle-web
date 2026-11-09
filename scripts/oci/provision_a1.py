@@ -371,6 +371,8 @@ def available(cli, env, service, limit, amount, cap=None, ad=None):
             args += ["--availability-domain", ad]
         value = document(cli.call(*args))
         used, remaining = number(value.get("used")), number(value.get("available"))
+        print("Verified limit=" + limit + " scope=" + ("root" if i == 0 else "target") +
+              " used=" + str(used) + " available=" + str(remaining), flush=True)
         require(remaining >= amount, "Insufficient service limit/quota headroom")
         if i == 0 and cap is not None:
             require(used + amount <= cap and used + remaining <= cap,
@@ -481,10 +483,10 @@ def provision(cli, env, store=None):
                                   "--availability-domain", AD, "--image-id", env["OCI_IMAGE_OCID"], "--all"))
     require(any(s.get("shape") == SHAPE and s.get("is-flexible") is True for s in shapes),
             "A1 image/shape compatibility not established")
-    available(cli, env, "compute", "standard-a1-core-regional-count", 2, 2)
-    available(cli, env, "compute", "standard-a1-memory-regional-count", 12, 12)
-    available(cli, env, "compute", "standard-a1-core-count", 2, ad=AD)
-    available(cli, env, "compute", "standard-a1-memory-count", 12, ad=AD)
+    # A1 limits are AD-scoped. Paris was verified to contain exactly this AD,
+    # so its root envelope is also the regional envelope; no invented regional IDs.
+    available(cli, env, "compute", "standard-a1-core-count", 2, 2, AD)
+    available(cli, env, "compute", "standard-a1-memory-count", 12, 12, AD)
     available(cli, env, "block-storage", "total-storage-gb", 50, 200, AD)
     # Recheck immediately before launch; external operators must not provision in parallel.
     if matching_instance(cli.call("compute", "instance", "list", "--compartment-id", compartment, "--all")):

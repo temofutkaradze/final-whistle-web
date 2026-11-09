@@ -9,7 +9,9 @@ Files: [workflow](../.github/workflows/oracle-a1.yml), [provisioner](../scripts/
 
 Only eu-paris-1 / hsNq:EU-PARIS-1-AD-1 / final-whistle-servers / VM.Standard.A1.Flex / 2 OCPU / 12 GB RAM / 50 GB boot / 10 VPU balanced storage. Existing final-whistle-vcn, final-whistle-public-subnet and Internet Gateway only; official Canonical Ubuntu 24.04 aarch64 platform image. No paid shape fallback, extra volumes, network creation or application deployment.
 
-Paris must be the ready home region. Root and compartment availability must both be readable; root regional A1 used+available must establish enforced ceilings <=2 OCPU/12 GB with enough remaining allocation. AD compute headroom and <=200 GB root block-storage envelope are required. Unknown, unlimited, excessive or insufficient limits fail closed. Limits are not a billing guarantee; live tenancy eligibility/IAM remain unverified.
+Paris must be the ready home region. Root and compartment availability must both be readable; root A1 used+available must establish enforced ceilings <=2 OCPU/12 GB with enough remaining allocation. The actual A1 limits are standard-a1-core-count and standard-a1-memory-count, both AD-scoped.
+Because Paris is verified to have exactly the expected one AD, the root AD ceiling is also the regional ceiling.
+Both root and target headroom and the <=200 GB root block-storage envelope are required. Unknown, unlimited, excessive or insufficient limits fail closed. Limits are not a billing guarantee; live tenancy eligibility/IAM remain unverified.
 
 The first cloud operation lists instances, then a second list immediately precedes launch. Any nonterminated Final Whistle name/tag prevents creation, including STOPPED and TERMINATING. Exactly one launch per workflow attempt; OCI automatic retries disabled. Existing resources are never changed.
 
@@ -81,7 +83,7 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 py -3 -m unittest discover -s scripts/oci -p "test_*.py" -v
 ~~~
 
-43 mock-only tests passed, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
+44 mock-only tests passed, including skipped/cancelled/failed intervening runs, state write/ack/read-back loss, capacity-token renewal, exact-attempt replay, retries with pending state, reconciliation authorization/evidence, existing-instance protection and unchanged resource restrictions. Python syntax and workflow YAML are checked separately. Tests prohibit real HTTP and OCI subprocess calls.
 
 Pinned CLI 3.96.0 launch option source was inspected offline during preparation. Full Windows CLI installation hit long-path limitations; GitHub uses Ubuntu. No live GitHub issue/API/IAM/OCI/billing validation has been performed.
 
@@ -90,3 +92,4 @@ References:
 - [OCI retry tokens](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/client/oci.core.ComputeClient.html)
 - [GitHub issue updates](https://docs.github.com/en/rest/issues/issues#update-an-issue)
 - [GitHub concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+\nLimit identifiers and AD scope are based on [Oracle Compute Quotas](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/resourcequotas_topic-Compute_Quotas.htm). Invented regional limit names must not be restored. Numeric usage/headroom diagnostics contain no credentials.\n
