@@ -100,7 +100,7 @@ jobs:
         run: python scripts/oci/audit_activation.py --execute --output "$RUNNER_TEMP/oracle-a1-audit.json"
       - name: Preserve redacted audit evidence even on partial reads
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: oracle-a1-read-only-audit
           path: ${{ runner.temp }}/oracle-a1-audit.json
