@@ -156,6 +156,12 @@ class ProvisionTests(unittest.TestCase):
         self.env = environment()
         self.store = MemoryState()
         self.cli = FakeCLI(self.env)
+        # Isolate existing launch/state-machine tests from the deliberately closed
+        # billing interlock. These mocks are NOT live eligibility verification.
+        # The unmocked interlock is tested through the full provision path below.
+        self.billing = patch("provision_a1.require_zero_cost_billing_evidence")
+        self.billing.start()
+        self.addCleanup(self.billing.stop)
 
     def run_fake(self):
         return p.provision(self.cli, self.env, self.store)
@@ -224,7 +230,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertFalse(self.cli.launches)
         self.assertFalse(self.store.history)
 
-    def test_real_a1_limit_ids_scope_and_root_ceiling_are_preserved(self):
+    def test_real_a1_limit_ids_scope_and_service_headroom_are_preserved(self):
         self.run_fake()
         calls = [args for args in self.cli.calls if args[:3] ==
                  ("limits", "resource-availability", "get") and
@@ -234,38 +240,67 @@ class ProvisionTests(unittest.TestCase):
                          {"standard-a1-core-count", "standard-a1-memory-count"})
         for args in calls:
             self.assertEqual(args[args.index("--availability-domain") + 1], p.AD)
-        for name, excessive in (("standard-a1-core-count", 3), ("standard-a1-memory-count", 13)):
-            self.cli = FakeCLI(self.env)
-            self.store = MemoryState()
-            self.cli.limits[name] = {"used": 0, "available": excessive}
-            with self.assertRaises(p.Unsafe):
-                self.run_fake()
-            self.assertFalse(self.cli.launches)
-            self.assertFalse(self.store.history)
+        # Large service limits are valid admission data. The launch-path billing
+        # interlock is mocked in this state-machine test, not proven by these calls.
+        self.cli = FakeCLI(self.env)
+        self.store = MemoryState()
+        self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": 41}
+        self.cli.limits["standard-a1-memory-count"] = {"used": 0, "available": 256}
+        self.cli.limits["total-storage-gb"] = {"used": 100, "available": 10000}
+        self.assertTrue(self.run_fake().startswith("CREATED"))
+        self.assertEqual(len(self.cli.launches), 1)
 
     def test_41_available_is_valid_service_headroom_not_billing_evidence(self):
         self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": 41}
-        # cap=None checks service admission only; it must not be used as billing proof.
-        p.available(self.cli, self.env, "compute", "standard-a1-core-count", 2, ad=p.AD)
+        # Service admission alone is never billing evidence.
+        self.assertEqual(p.available(self.cli, self.env, "compute", "standard-a1-core-count", 2, ad=p.AD), [0, 0])
         self.assertEqual(len(self.cli.calls), 2)
         self.assertFalse(self.cli.launches)
         self.assertFalse(self.store.history)
 
-    def test_unproven_free_entitlement_keeps_41_headroom_launch_blocked(self):
-        self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": 41}
+    def test_unmocked_billing_interlock_blocks_small_or_large_service_limits(self):
+        self.billing.stop()
+        for headroom in (2, 4, 41):
+            with self.subTest(headroom=headroom):
+                self.cli = FakeCLI(self.env)
+                self.store = MemoryState()
+                self.cli.limits["standard-a1-core-count"] = {"used": 0, "available": headroom}
+                before = self.store.read()
+                with self.assertRaisesRegex(p.Unsafe, "Zero-cost billing evidence incomplete"):
+                    self.run_fake()
+                self.assertEqual(self.cli.lists, 2)
+                self.assertEqual(sum(c[:3] == ("limits", "resource-availability", "get")
+                                     for c in self.cli.calls), 6)
+                self.assertFalse(self.cli.launches)
+                self.assertFalse(self.store.history)
+                self.assertEqual(self.store.read(), before)
+
+    def test_unmocked_billing_interlock_preserves_existing_instance_pending_state(self):
+        token = self.make_pending()
         before = self.store.read()
-        with self.assertRaisesRegex(p.Unsafe, "billing eligibility unresolved"):
+        history = list(self.store.history)
+        self.billing.stop()
+        self.cli = FakeCLI(self.env)
+        self.cli.instances = [instance("PROVISIONING")]
+        self.assertTrue(self.run_fake().startswith("EXISTS"))
+        self.assertFalse(self.cli.launches)
+        self.assertEqual(self.store.read(), before)
+        self.assertEqual(self.store.value["token"], token)
+        self.assertEqual(self.store.history, history)
+
+    def test_billing_interlock_has_no_environment_or_rate_card_override(self):
+        self.billing.stop()
+        self.env.update(OCI_A1_FREE_ELIGIBLE="true", OCI_A1_BILLING_VERIFIED="true", OCI_A1_PROVISIONING_ENABLED="true")
+        with self.assertRaisesRegex(p.Unsafe, "Zero-cost billing evidence incomplete"):
             self.run_fake()
         self.assertFalse(self.cli.launches)
         self.assertFalse(self.store.history)
-        self.assertEqual(self.store.read(), before)
 
     def test_existing_usage_cannot_consume_reviewed_allocation_with_large_headroom(self):
-        # The current 2/12 guard is intentionally stricter than the requested
-        # 4/24 maximum while Oracle's entitlement documentation disagrees.
-        for name, used in (("standard-a1-core-count", 1),
+        # Allocation policy is separate from service headroom and billing proof.
+        for name, used in (("standard-a1-core-count", 3),
                            ("standard-a1-core-count", 4),
-                           ("standard-a1-memory-count", 1),
+                           ("standard-a1-memory-count", 13),
                            ("standard-a1-memory-count", 24),
                            ("total-storage-gb", 151)):
             with self.subTest(limit=name, used=used):
@@ -276,6 +311,12 @@ class ProvisionTests(unittest.TestCase):
                     self.run_fake()
                 self.assertFalse(self.cli.launches)
                 self.assertFalse(self.store.history)
+
+    def test_allocation_ceiling_checks_both_scopes_and_rejects_missing_usage(self):
+        p.allocation_ceiling([2, 2], 2, 4)
+        for usage in ([], [0], [0, 0, 0], None, [0, 3], [3, 0], [False, 0]):
+            with self.subTest(usage=usage), self.assertRaises(p.Unsafe):
+                p.allocation_ceiling(usage, 2, 4)
 
     def test_ambiguous_service_usage_never_establishes_headroom_or_billing(self):
         for value in (None, {}, {"used": 0}, {"used": None, "available": 41},
@@ -426,13 +467,13 @@ class ProvisionTests(unittest.TestCase):
                 self.run_fake()
             self.assertFalse(self.cli.launches)
 
-    def test_insufficient_or_unbounded_free_limits_fail(self):
+    def test_insufficient_headroom_excess_allocation_and_invalid_usage_fail(self):
         for name, value in (
             ("standard-a1-core-count", {"used": 0, "available": 1}),
             ("standard-a1-memory-count", {"used": 0, "available": 11}),
             ("total-storage-gb", {"used": 151, "available": 49}),
-            ("standard-a1-core-count", {"used": 0, "available": 24}),
-            ("total-storage-gb", {"used": 0, "available": 10000}),
+            ("standard-a1-core-count", {"used": 3, "available": 41}),
+            ("total-storage-gb", {"used": 151, "available": 10000}),
             ("standard-a1-core-count", {"available": 2}),
             ("standard-a1-memory-count", {"used": False, "available": 12}),
         ):

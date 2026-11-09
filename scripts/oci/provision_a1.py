@@ -388,10 +388,9 @@ def diagnose_limit_catalog(cli, env, service, limit, ad):
         print("Read-only Limits catalog could not be verified; original failure retained", flush=True)
 
 
-def available(cli, env, service, limit, amount, cap=None, ad=None):
-    # Service headroom is not a billing entitlement. Keep the existing conservative
-    # launch restriction until tenancy entitlement and complete metered usage can
-    # be established separately; even a small service limit is not billing proof.
+def available(cli, env, service, limit, amount, ad=None):
+    # Admission only: service/quota headroom says nothing about free billing.
+    usage = []
     scopes = [env["OCI_TENANCY_OCID"], env["OCI_COMPARTMENT_OCID"]]
     for i, compartment in enumerate(scopes):
         args = ["limits", "resource-availability", "get", "--compartment-id", compartment,
@@ -407,9 +406,27 @@ def available(cli, env, service, limit, amount, cap=None, ad=None):
         print("Verified limit=" + limit + " scope=" + ("root" if i == 0 else "target") +
               " used=" + str(used) + " available=" + str(remaining), flush=True)
         require(remaining >= amount, "Insufficient service limit/quota headroom")
-        if i == 0 and cap is not None:
-            require(used + amount <= cap and used + remaining <= cap,
-                    "Always Free billing eligibility unresolved; service-limit headroom is not a free allocation")
+        usage.append(used)
+    return usage
+
+
+def allocation_ceiling(usage, amount, ceiling):
+    # Additional allocation guard, NOT a complete inventory or a billing proof.
+    # Check both reported scopes; missing cross-compartment/meter accounting must
+    # still be rejected by the independent billing interlock.
+    require(isinstance(usage, list) and len(usage) == 2,
+            "Incomplete root/target resource usage")
+    require(all(number(used) + amount <= ceiling for used in usage),
+            "Observed resource usage exceeds the configured allocation ceiling")
+
+
+def require_zero_cost_billing_evidence():
+    # Deliberate launch interlock, not a fake billing verifier. The dated rate card
+    # establishes prices but the current APIs do not establish complete monthly
+    # consumption, boot-volume billing classification, or post-trial terms.
+    # No env/input override: implementing a real verifier requires separate review.
+    raise Unsafe("Zero-cost billing evidence incomplete: monthly consumption, "
+                 "boot-volume capacity/performance eligibility and rate validity require verification; no launch")
 
 
 def matching_instance(items):
@@ -518,12 +535,15 @@ def provision(cli, env, store=None):
             "A1 image/shape compatibility not established")
     # A1 limits are AD-scoped. Paris was verified to contain exactly this AD,
     # so its root envelope is also the regional envelope; no invented regional IDs.
-    available(cli, env, "compute", "standard-a1-core-count", 2, 2, AD)
-    available(cli, env, "compute", "standard-a1-memory-count", 12, 12, AD)
-    available(cli, env, "block-storage", "total-storage-gb", 50, 200, AD)
+    allocation_ceiling(available(cli, env, "compute", "standard-a1-core-count", 2, AD), 2, 4)
+    allocation_ceiling(available(cli, env, "compute", "standard-a1-memory-count", 12, AD), 12, 24)
+    allocation_ceiling(available(cli, env, "block-storage", "total-storage-gb", 50, AD), 50, 200)
     # Recheck immediately before launch; external operators must not provision in parallel.
     if matching_instance(cli.call("compute", "instance", "list", "--compartment-id", compartment, "--all")):
         return "EXISTS: discovered during preflight; no launch"
+    # Must fail before any durable pending write or OCI launch. Neither the rate
+    # card, allocation ceilings, service limits nor an estimator is billing proof.
+    require_zero_cost_billing_evidence()
     payload = {
         "availabilityDomain": AD, "compartmentId": compartment, "displayName": NAME,
         "shape": SHAPE, "shapeConfig": {"ocpus": 2, "memoryInGBs": 12},
