@@ -66,7 +66,7 @@ jobs:
         run: python scripts/oci/provision_a1.py --execute
 
   audit:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.audit_only }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.audit_only) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
