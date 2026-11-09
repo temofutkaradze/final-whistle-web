@@ -380,3 +380,28 @@ Local validation for the complete activation-audit change: **99 mock-only tests
 passed**, Python AST syntax passed, workflow YAML and cron/permission/concurrency
 assertions passed. No application test/build, production service or cloud write
 was needed.
+
+
+### Enhanced live audit verified on the PR branch
+
+[Run 42703019928](https://github.com/temofutkaradze/final-whistle-web/actions/runs/42703019928)
+executed the new SDK-only audit from `feat/oci-read-only-activation-audit` at
+`3888014`. The audit's 99 mocked regression tests passed in GitHub; the ordinary
+PR CI `check` also passed. The provision job was SKIPPED. The enhanced JSON
+artifact and per-requirement Actions summary were produced successfully.
+
+PASS: environment structure, Paris home region, target compartment, existing
+public network/routing/security-list associations, Canonical Ubuntu 24.04 ARM64
+image, flexible A1 compatibility, service/quota checks, enumerated resource reads,
+exact fixed launch payload, observed A1/storage envelopes, all three Usage/Cost
+API access checks and duplicate safety state. No matching VM or A1 allocation was
+returned, retained home-region boot/block allocations totalled 0 GB, and Issue #11
+remained ready at revision 0.
+
+BLOCKED: OSP account plan (NotAuthorizedOrNotFound on list_subscriptions), remaining
+monthly entitlement (all three APIs return no rows), prospective Balanced VPU
+free treatment and external-allocation enforcement. The audit step/run correctly
+failed for required missing evidence; that is not proof of a provisioning/software
+failure or a green eligibility result. No LaunchInstance or Issue write was made.
+The observed enable variable remains false. A merge of this audit enhancement
+would not enable provisioning or resolve the listed billing prerequisites.
