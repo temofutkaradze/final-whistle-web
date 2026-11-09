@@ -22,11 +22,21 @@ OPERATIONS = {
     "compartments": ("identity", "list_compartments", "list"),
     "domains": ("identity", "list_availability_domains", "list"),
     "instances": ("compute", "list_instances", "list"),
+    "compartment": ("identity", "get_compartment", "object"),
+    "image": ("compute", "get_image", "object"),
+    "shapes": ("compute", "list_shapes", "list"),
+    "subnet": ("network", "get_subnet", "object"),
+    "vcn": ("network", "get_vcn", "object"),
+    "route_table": ("network", "get_route_table", "object"),
+    "gateway": ("network", "get_internet_gateway", "object"),
+    "security_list": ("network", "get_security_list", "object"),
     "boot_volumes": ("block", "list_boot_volumes", "list"),
     "volumes": ("block", "list_volumes", "list"),
     "boot_attachments": ("compute", "list_boot_volume_attachments", "list"),
     "volume_attachments": ("compute", "list_volume_attachments", "list"),
     "limits": ("limits", "get_resource_availability", "object"),
+    "limit_services": ("limits", "list_services", "list"),
+    "limit_definitions": ("limits", "list_limit_definitions", "list"),
     "usage": ("usage", "request_summarized_usages", "items"),
 }
 
@@ -122,6 +132,7 @@ class SDKBackend:
                     raise AuditError("client_budget_exhausted")
                 classes = {"identity": self.oci.identity.IdentityClient,
                            "compute": self.oci.core.ComputeClient,
+                           "network": self.oci.core.VirtualNetworkClient,
                            "block": self.oci.core.BlockstorageClient,
                            "limits": self.oci.limits.LimitsClient,
                            "usage": self.oci.usage_api.UsageapiClient,
@@ -391,11 +402,12 @@ class Audit:
 
     def run(self):
         self.subscription()
+        before_inventory_errors = len(self.report["errors"])
         try:
             self.inventory()
         except AuditError as error:
             self.error("inventory", "inventory", str(error))
-        inventory_errors = len(self.report["errors"])
+        inventory_errors = len(self.report["errors"]) - before_inventory_errors
         self.report["inventory_read_status"] = "PARTIAL" if inventory_errors else "ENUMERATED_SCOPES_READ"
         self.report["tenancy_wide_visibility_proven"] = False
         self.billing()

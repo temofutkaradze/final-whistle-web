@@ -449,23 +449,15 @@ def matching_instance(items):
     return found[0] if found else None
 
 
-def provision(cli, env, store=None):
-    validate_environment(env)
+def verify_target(cli, env, checked=lambda name: None):
+    """Shared read-only target checks; transport determines read capabilities."""
     compartment = env["OCI_COMPARTMENT_OCID"]
-    # First cloud operation is list; malformed/inaccessible lists are never treated as empty.
-    existing = matching_instance(cli.call("compute", "instance", "list",
-                                         "--compartment-id", compartment, "--all"))
-    if existing:
-        return "EXISTS: " + existing["lifecycle-state"] + "; no resources changed"
-    store = store or GitHubState(env)
-    record = prepare_attempt(store, env)
-    if record is None:
-        return "RECONCILED: no launch; next scheduled attempt may proceed"
     home = collection(cli.call("iam", "region-subscription", "list",
                                "--tenancy-id", env["OCI_TENANCY_OCID"], "--all"))
     require(sum(r.get("is-home-region") is True for r in home) == 1 and
             any(r.get("is-home-region") is True and r.get("region-name") == REGION and
                 r.get("status") == "READY" for r in home), "Paris must be the ready home region")
+    checked("home_region")
     domains = collection(cli.call("iam", "availability-domain", "list",
                                   "--compartment-id", env["OCI_TENANCY_OCID"]))
     # Strict single-AD region avoids an unverified cross-AD storage aggregate.
@@ -474,6 +466,7 @@ def provision(cli, env, store=None):
     comp = document(cli.call("iam", "compartment", "get", "--compartment-id", compartment))
     require(comp.get("id") == compartment and comp.get("name") == "final-whistle-servers" and
             comp.get("lifecycle-state") == "ACTIVE", "Unexpected target compartment")
+    checked("compartment")
     subnet = document(cli.call("network", "subnet", "get", "--subnet-id", env["OCI_SUBNET_OCID"]))
     # Existing networking may live in the configured tenancy root. Never allow
     # an arbitrary third compartment, or change where the VM itself is created.
@@ -525,6 +518,7 @@ def provision(cli, env, store=None):
                 isinstance(security_list.get("egress-security-rules"), list),
                 "Existing security list identity, association or state mismatch")
     print("Verified existing public network and security-list associations; no network changes", flush=True)
+    checked("network")
     image = document(cli.call("compute", "image", "get", "--image-id", env["OCI_IMAGE_OCID"]))
     require(image.get("id") == env["OCI_IMAGE_OCID"] and image.get("compartment-id") is None and
             image.get("operating-system") == "Canonical Ubuntu" and
@@ -533,15 +527,33 @@ def provision(cli, env, store=None):
                          image.get("display-name", "")) is not None and
             image.get("lifecycle-state") == "AVAILABLE" and number(image.get("size-in-mbs")) <= 51200,
             "Cannot establish free platform Ubuntu 24.04 ARM64 image eligibility")
+    checked("image")
     shapes = collection(cli.call("compute", "shape", "list", "--compartment-id", compartment,
                                   "--availability-domain", AD, "--image-id", env["OCI_IMAGE_OCID"], "--all"))
     require(any(s.get("shape") == SHAPE and s.get("is-flexible") is True for s in shapes),
             "A1 image/shape compatibility not established")
+    checked("shape")
     # A1 limits are AD-scoped. Paris was verified to contain exactly this AD,
     # so its root envelope is also the regional envelope; no invented regional IDs.
     allocation_ceiling(available(cli, env, "compute", "standard-a1-core-count", 2, AD), 2, 2)
     allocation_ceiling(available(cli, env, "compute", "standard-a1-memory-count", 12, AD), 12, 12)
     allocation_ceiling(available(cli, env, "block-storage", "total-storage-gb", 50, AD), 50, 200)
+    checked("quotas")
+
+
+def provision(cli, env, store=None):
+    validate_environment(env)
+    compartment = env["OCI_COMPARTMENT_OCID"]
+    # First cloud operation is list; malformed/inaccessible lists are never treated as empty.
+    existing = matching_instance(cli.call("compute", "instance", "list",
+                                         "--compartment-id", compartment, "--all"))
+    if existing:
+        return "EXISTS: " + existing["lifecycle-state"] + "; no resources changed"
+    store = store or GitHubState(env)
+    record = prepare_attempt(store, env)
+    if record is None:
+        return "RECONCILED: no launch; next scheduled attempt may proceed"
+    verify_target(cli, env)
     # Recheck immediately before launch; external operators must not provision in parallel.
     if matching_instance(cli.call("compute", "instance", "list", "--compartment-id", compartment, "--all")):
         return "EXISTS: discovered during preflight; no launch"
