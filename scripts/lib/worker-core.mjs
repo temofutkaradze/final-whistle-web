@@ -123,6 +123,7 @@ export function createWorkerCore(deps) {
       ...(await brandLookFields(brand)),
       ...(await customTemplateFields(brand)),
       ...(await pickBackground(sel, brand)),
+      league_id: match.leagueId,
       league_logo: match.leagueLogo,
       home_logo: match.homeLogo,
       away_logo: match.awayLogo,
@@ -265,6 +266,8 @@ export function createWorkerCore(deps) {
           htmlCache.set(
             match.fixtureId,
             buildEventsHtml(match.eventsJson, {
+              home_team_id: match.homeTeamId,
+              away_team_id: match.awayTeamId,
               home_team: match.homeTeam,
               away_team: match.awayTeam,
               home_score: match.homeScore,

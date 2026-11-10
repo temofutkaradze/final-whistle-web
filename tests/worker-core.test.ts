@@ -138,7 +138,7 @@ describe("worker: the normal path", () => {
     const core = makeCore();
     await core.tick();
     expect(renderPost).toHaveBeenCalledTimes(1);
-    expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
+    expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", league_id: 39, home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
     expect(tg.sendDocument).toHaveBeenCalledTimes(1);
     expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Alpha FC 2-1 Beta FC");
     expect(sel("s1")).toMatchObject({ status: "COMPLETED", sentAt: new Date(T0) });

@@ -26,6 +26,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { leagueAccents } = require('./league-accents.js');
+const { fitClassicTeamNames } = require('./match-layout.js');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { checkTemplateHtml, withCsp } = require('./template-check.js');
 const {expandPlaceholders}=require('./final-document.js');
@@ -589,11 +591,14 @@ const server = http.createServer(async (req,res) => {
         [backgroundSrc,homeLogoSrc,awayLogoSrc,leagueLogoFinal].map(source=>security.validateMatchImageSource(source,{fileDirectories:ALLOWED_FILE_DIRS}))
       );
 
+      const accents = leagueAccents(d.league_id, d.league_logo);
       const replacements = {
         '{{BACKGROUND}}': escapeHtml(backgroundSrc),
         '{{PAGE_NAME}}': pageName,
         '{{EVENTS_CLASS}}': '',
         '{{TOTAL_EVENTS}}': d.total_events,
+        '{{LEAGUE_LINE_LEFT}}': accents.left,
+        '{{LEAGUE_LINE_RIGHT}}': accents.right,
         '{{LEAGUE_LOGO}}': escapeHtml(leagueLogoFinal??''),
         '{{HOME_LOGO}}': escapeHtml(homeLogoSrc??''),
         '{{HOME_NAME}}': escapeHtml(d.home_team??''),
@@ -660,6 +665,7 @@ const server = http.createServer(async (req,res) => {
             if(isCustom) await guardPage(page, remoteOk, htmlPath, customManifest);
             await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 60000 });
             await waitUntilReady(page);
+            if (!isCustom && templatePathFor(d.template) === templatePathFor('classic')) await fitClassicTeamNames(page);
             tPageReady = Date.now();
 
             // High-resolution intermediate (2160x2700), returned as a buffer (no disk write)

@@ -117,6 +117,22 @@ describe("render server (fake Chromium)", () => {
     }
   });
 
+  it("applies league accents to Classic lines only and retains white for unknown IDs", async () => {
+    const htmlFor = async (id: string, league_id: unknown, template = "classic") => {
+      const r = await post(base(id, {league_id,template}));
+      expect(r.status).toBe(200);
+      return readFileSync(r.json.html_path,"utf8");
+    };
+    const colored = await htmlFor("league_known",39);
+    expect(colored).toContain("linear-gradient(90deg, #6b2bff, #8933fa, #a63bf5)");
+    expect(colored).not.toMatch(/\{\{LEAGUE_LINE_/);
+    const unknown = await htmlFor("league_unknown",999);
+    expect(unknown).toContain("background: rgba(255, 255, 255, 0.45)");
+    expect(unknown).not.toContain("#6b2bff");
+    expect(await htmlFor("league_panel",39,"panel")).not.toContain("#6b2bff");
+    expect(await htmlFor("league_injection",'39; color:red;')).not.toContain("39; color:red;");
+  });
+
   it("uses the chosen template, and Classic when the name is unknown or tries to leave the folder", async () => {
     const title = async (template: unknown, id: string) => readFileSync((await post(base(id, { template }))).json.html_path, "utf8").match(/<title>([^<]*)<\/title>/)?.[1];
     const classic = await title("classic", "ta");

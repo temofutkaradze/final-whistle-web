@@ -1,0 +1,106 @@
+{
+  "reference": "user-supplied 6 individual JPGs, league-color PNG, 17-tile scenario collage",
+  "baseline": "1f6882f",
+  "output": {
+    "width": 1080,
+    "height": 1350,
+    "jpegQuality": 97,
+    "chromaSubsampling": "4:4:4",
+    "embeddedProfile": "sRGB",
+    "captureScale": 2
+  },
+  "unchangedInputComparisons": {
+    "classic": {
+      "before": "445beffacaafe73ed079c42231d5e110f7d44efe9601a0449db578ebd745b5ce",
+      "after": "445beffacaafe73ed079c42231d5e110f7d44efe9601a0449db578ebd745b5ce",
+      "byteIdentical": true
+    },
+    "panel": {
+      "before": "8e462d5341e21a49ad5fe0cf113bfcac90eca49a9d2fe42ef92b2f64eadd8085",
+      "after": "8e462d5341e21a49ad5fe0cf113bfcac90eca49a9d2fe42ef92b2f64eadd8085",
+      "byteIdentical": true
+    },
+    "frame": {
+      "before": "addd7f8be435337c6f13c218e0bd39fee83e0b63280bc113ca7a9ae717eb959f",
+      "after": "0b7dd47d43350c4418dca7bb51da80bb9c0c7bd58dfb0b434287f62c073c0067",
+      "byteIdentical": false,
+      "meanChannelDifference": 0.017810013717421126,
+      "maxChannelDifference": 77
+    },
+    "stripe": {
+      "before": "28971caa793600b343c0fc3986f72b6dd849fc939e18bb2a1b47b9a28b630f47",
+      "after": "28971caa793600b343c0fc3986f72b6dd849fc939e18bb2a1b47b9a28b630f47",
+      "byteIdentical": true
+    },
+    "news-single": {
+      "before": "f670d85c0cc3146c5b25b9939113b0db0606322519f018d91f594faef6f079ee",
+      "after": "f670d85c0cc3146c5b25b9939113b0db0606322519f018d91f594faef6f079ee",
+      "byteIdentical": true
+    },
+    "news-left": {
+      "before": "6b472383a84b88a0a9fb9deba635f4b1635a4d95bc7a238b5f8875142d3027fa",
+      "after": "6b472383a84b88a0a9fb9deba635f4b1635a4d95bc7a238b5f8875142d3027fa",
+      "byteIdentical": true
+    },
+    "news-right": {
+      "before": "96e873d2c2851c2a97e2d8d155db911105c372fd66245f2d70ee02dceef7a6ec",
+      "after": "96e873d2c2851c2a97e2d8d155db911105c372fd66245f2d70ee02dceef7a6ec",
+      "byteIdentical": true
+    },
+    "news-breaking": {
+      "before": "1551d9d619ff663c33497c8a197086c18f5459312b134f4f57eab779326836ff",
+      "after": "1551d9d619ff663c33497c8a197086c18f5459312b134f4f57eab779326836ff",
+      "byteIdentical": true
+    }
+  },
+  "lineGeometry": [
+    {
+      "x": 90,
+      "y": 772.5,
+      "width": 350,
+      "height": 2,
+      "bottom": 774.5,
+      "right": 440
+    },
+    {
+      "x": 640,
+      "y": 772.5,
+      "width": 350,
+      "height": 2,
+      "bottom": 774.5,
+      "right": 990
+    }
+  ],
+  "longNameFit": {
+    "verified": true,
+    "id": 9015,
+    "names": [
+      {
+        "x": 100,
+        "y": 1054.25,
+        "width": 240,
+        "height": 45.09375,
+        "bottom": 1099.34375,
+        "right": 340,
+        "scrollWidth": 240,
+        "font": "20.5px"
+      },
+      {
+        "x": 740,
+        "y": 1046,
+        "width": 240,
+        "height": 61.59375,
+        "bottom": 1107.59375,
+        "right": 980,
+        "scrollWidth": 240,
+        "font": "28px"
+      }
+    ]
+  },
+  "notes": [
+    "Reference source photo is not available; approved existing CC0 QA sports photo used instead.",
+    "Scenario badges A/B/L are deliberately synthetic placeholders, not replacement production club logos.",
+    "Frame HTML before/after is identical; JPG text-edge variance remains uncharacterized. No all-eight byte-identity claim.",
+    "Ordinary Classic byte comparison was repeated after the long-name fit change."
+  ]
+}
