@@ -1,3 +1,4 @@
+import {leagueAccents} from "../../render/league-accents.js";
 import {expandPlaceholders} from "../../render/final-document.js";
 // Pure helpers (no Node APIs, safe to import in the browser): the invented sample match used for sample posts and
 // template previews, and the way a template's {{PLACEHOLDERS}} are filled.
@@ -90,6 +91,8 @@ export function fillPlaceholders(html: string, brandHtml: string): string {
     "{{PAGE_NAME}}": brandHtml,
     "{{EVENTS_CLASS}}": "",
     "{{TOTAL_EVENTS}}": s.total_events,
+    "{{LEAGUE_LINE_LEFT}}": leagueAccents().left,
+    "{{LEAGUE_LINE_RIGHT}}": leagueAccents().right,
     "{{LEAGUE_LOGO}}": s.league_logo,
     "{{HOME_LOGO}}": s.home_logo,
     "{{HOME_NAME}}": s.home_team,

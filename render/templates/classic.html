@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=1080, height=1350, initial-scale=1.0">
 
+    <meta name="match-teams" content="{{HOME_NAME}} / {{AWAY_NAME}}">
     <title>Football Match Result</title>
 
     <!-- Montserrat -->
@@ -170,9 +171,13 @@
 
             height: 2px;
 
-            background: rgba(255, 255, 255, 0.45);
+            background: {{LEAGUE_LINE_LEFT}};
         }
 
+
+        .league-line:last-child {
+            background: {{LEAGUE_LINE_RIGHT}};
+        }
 
         .league-logo-wrapper {
             display: flex;
@@ -187,8 +192,10 @@
 
 
         .league-logo {
-            max-width: 100px;
-            max-height: 85px;
+            width: 72px;
+            height: 56px;
+            max-width: 72px;
+            max-height: 56px;
 
             object-fit: contain;
 
@@ -241,7 +248,7 @@
             width: 180px;
             height: 180px;
 
-            margin-bottom: 15px;
+            margin-bottom: 0;
         }
 
 
@@ -256,25 +263,7 @@
         }
 
 
-        .team-name {
-            width: 240px;
-
-            color: #ffffff;
-
-            font-size: 28px;
-            font-weight: 800;
-
-            line-height: 1.1;
-
-            text-align: center;
-            text-transform: uppercase;
-
-            text-shadow:
-                0 3px 8px rgba(0, 0, 0, 0.7);
-        }
-
-
-        /* =========================================================
+/* =========================================================
            SCORE
         ========================================================= */
 
@@ -319,7 +308,7 @@
 
             width: 100%;
 
-            margin-top: 35px;
+            margin-top: 32px;
         }
 
 
@@ -650,9 +639,7 @@
 
                 </div>
 
-                <div class="team-name">
-                    {{HOME_NAME}}
-                </div>
+
 
             </div>
 
@@ -686,9 +673,7 @@
 
                 </div>
 
-                <div class="team-name">
-                    {{AWAY_NAME}}
-                </div>
+
 
             </div>
 

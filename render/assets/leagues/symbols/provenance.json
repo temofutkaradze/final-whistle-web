@@ -1,0 +1,57 @@
+[
+  {
+    "id": 78,
+    "source": "render/assets/leagues/78.png",
+    "sourceSha256": "8c7f579bd8f9b910c886a4c33c7d36eebcf5e009d3d53595b085ea7f23c69b6a",
+    "crop": {
+      "left": 0,
+      "top": 0,
+      "width": 300,
+      "height": 240
+    }
+  },
+  {
+    "id": 135,
+    "source": "render/assets/leagues/135.png",
+    "sourceSha256": "64f96e6466f2c3472d5132a313e325a3ba2a913b64bf4330b6096af087a38e9c",
+    "crop": {
+      "left": 0,
+      "top": 0,
+      "width": 300,
+      "height": 220
+    }
+  },
+  {
+    "id": 2,
+    "source": "https://media.api-sports.io/football/leagues/2.png",
+    "sourceSha256": "c6f9da8e0f9e8c0beb93392b967dab013010af53cf2889b7e99e24aa9d29a3b2",
+    "crop": {
+      "left": 0,
+      "top": 0,
+      "width": 158,
+      "height": 77
+    }
+  },
+  {
+    "id": 61,
+    "source": "https://media.api-sports.io/football/leagues/61.png",
+    "sourceSha256": "4ccb07f4cb560024deb1f3eb5d5b15573e095c7398228d0f9d78ac4c0b1d9448",
+    "crop": {
+      "left": 0,
+      "top": 0,
+      "width": 267,
+      "height": 98
+    }
+  },
+  {
+    "id": 140,
+    "source": "https://media.api-sports.io/football/leagues/140.png",
+    "sourceSha256": "320106f929dc5984cae891d5312ea5be69de45db17d6e6d805505d3d99d84400",
+    "crop": {
+      "left": 0,
+      "top": 0,
+      "width": 197,
+      "height": 103
+    }
+  }
+]

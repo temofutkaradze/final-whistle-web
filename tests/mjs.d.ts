@@ -3,7 +3,7 @@
 declare module "*/scripts/lib/events.mjs" {
   export function buildEventsHtml(
     rawEvents: unknown,
-    match: { home_team: string; away_team: string; home_score: number; away_score: number },
+    match?: { home_team?: string; away_team?: string; home_team_id?: number; away_team_id?: number; home_score?: number; away_score?: number } | null,
   ): { home_events_html: string; away_events_html: string; total_events: number };
 }
 
