@@ -114,10 +114,11 @@ describe("render server (fake Chromium)", () => {
       expect(resolve(r.json.jpg_path).startsWith(join(RENDER_DIR, "output")), t).toBe(true);
       const html = readFileSync(r.json.html_path, "utf8");
       expect(html, t).not.toMatch(/\{\{[A-Z_]+\}\}/);
+      expect(html, t).not.toContain('class="team-name"');
     }
   });
 
-  it("applies league accents to Classic lines only and retains white for unknown IDs", async () => {
+  it("applies league accents to built-in lines only and retains white for unknown IDs", async () => {
     const htmlFor = async (id: string, league_id: unknown, template = "classic") => {
       const r = await post(base(id, {league_id,template}));
       expect(r.status).toBe(200);
@@ -129,8 +130,18 @@ describe("render server (fake Chromium)", () => {
     const unknown = await htmlFor("league_unknown",999);
     expect(unknown).toContain("background: rgba(255, 255, 255, 0.45)");
     expect(unknown).not.toContain("#6b2bff");
-    expect(await htmlFor("league_panel",39,"panel")).not.toContain("#6b2bff");
+    expect(await htmlFor("league_panel",39,"panel")).toContain("#6b2bff");
     expect(await htmlFor("league_injection",'39; color:red;')).not.toContain("39; color:red;");
+  });
+
+  it("uses transparent symbol copies for built-ins without replacing custom white originals", async () => {
+    for (const id of [78,135,2,61,140]) {
+      const result=await post(base(`symbol_${id}`, {league_id:id}));
+      expect(result.status).toBe(200);
+      const html=readFileSync(result.json.html_path,'utf8');
+      expect(html).toContain(`/assets/leagues/symbols/${id}.png`);
+      expect(html.includes('class="league-logo no-filter"')).toBe(id===78||id===135);
+    }
   });
 
   it("uses the chosen template, and Classic when the name is unknown or tries to leave the folder", async () => {

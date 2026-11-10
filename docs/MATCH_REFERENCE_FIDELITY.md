@@ -3,7 +3,13 @@
 Branch: `feat/match-reference-fidelity`. Baseline: `1f6882f` (latest main when work
 started). No deployment, database, Oracle or Telegram production changes.
 
-## Reference analysis
+**Final visual design approved by the user on 2026-11-10**, including the
+Premier League optical-size adjustment. Publishing source/assets for PR review
+is authorized; merging and deployment still require separate approval. Generated
+previews stay local and ignored. All custom HTML/Template Builder layouts and
+the Nations League asset remain unchanged, as in the approved previews.
+
+## Original reference analysis (historical baseline)
 
 The six supplied individual JPGs use the existing **Classic** layout. They are
 768x960 (4:5); the renderer's 1080x1350 uses the same aspect ratio. Existing
@@ -85,8 +91,8 @@ Central configuration: [league-accents.js](../render/league-accents.js).
 
 The worker now passes the stored numeric league ID. Legacy requests may still
 use the league ID in their logo URL. Explicit unknown IDs remain white even if
-a contradictory logo URL names another league. Team/league logos themselves
-are unchanged. Existing local white-logo assets are retained.
+a contradictory logo URL names another league. Team logos and the original local white-logo files remain unchanged. Built-ins
+now use separate league symbol copies where a clean crop is available.
 
 ## Implementation and security scope
 
@@ -94,14 +100,15 @@ are unchanged. Existing local white-logo assets are retained.
   placeholders; unchanged line geometry and normal typography.
 - [League accents](../render/league-accents.js) and its declaration: immutable,
   ID-keyed reference samples; shared runtime/preview fallback.
-- [Match layout](../render/match-layout.js) and its declaration: one bounded DOM
-  measurement of two Classic names after fonts load. Only overflowing names
-  shrink. Long-name case measured 20.5px versus unchanged 28px normal name;
-  both stay inside their 240px boxes. No user HTML or resource injection.
-- [Render server](../render/render-server.js): apply trusted palette tokens and
-  Classic-only fitting. Customer templates skip fitting. Persistent Chromium,
-  final custom-template validation, manifests, CSP, downloader, authorization,
-  deadlines and export settings remain intact.
+- Built-in Classic, Panel, Frame and Stripe omit visible team-name elements.
+  Team names remain in match data and non-visible document metadata. Logo/score
+  rows are symmetric, with `object-fit: contain`; Frame puts logos beside the
+  score, Panel reclaims the former name area, and Stripe has a shorter band.
+- [Render server](../render/render-server.js): uses reviewed symbol copies for
+  built-ins, with explicit numeric league ID preferred over legacy logo URLs.
+  Custom HTML keeps its original layout and original local league assets.
+  Persistent Chromium, final validation, manifests, CSP, downloader,
+  authorization, deadlines and export settings remain intact.
 - [Events](../scripts/lib/events.mjs): conservative duplicate handling,
   team-aware dismissals and optional stable team IDs; existing filtering/order.
 - [Worker core](../scripts/lib/worker-core.mjs): propagate existing stored IDs.
@@ -110,11 +117,11 @@ are unchanged. Existing local white-logo assets are retained.
   [sample match](../src/lib/sample-match.ts): recognize/fill the two safe optional
   palette tokens; Template Builder settings and output are unchanged.
 - Focused regression tests and fixtures cover all 17 reference scenarios,
-  palette/fallback, real long-name layout, worker propagation and renderer HTML.
+  palette/fallback, real browser geometry, worker propagation and renderer HTML.
 - [Local preview tool](../scripts/previews/match-references.mjs): starts/stops
   only its own ephemeral test renderers, never loads .env, DB or bot clients.
 
-## Verification and previews
+## Original reference-pass verification (before the name-free revision) and previews
 
 **297 tests passed across 11 relevant suites**, including events, reference
 scenarios, real Chromium name fitting, worker core, render-server, lifecycle,
@@ -187,7 +194,7 @@ output and verification.json even if Frame byte equality fails.
 
 ## Private local visual approval previews
 
-**Design status: PENDING USER REVIEW.** Do not merge or deploy before approval.
+**Design status: USER APPROVED.** Do not merge or deploy without separate authorization.
 
 Preview generation is local only. There is no preview Actions workflow or artifact
 upload. Generated JPGs, contact sheets, ZIPs and mock-data outputs are not tracked.
@@ -225,3 +232,91 @@ They remain in earlier PR commits; this is not a history purge. The prior Action
 artifact is separate from Git history and must be checked independently before
 any explicitly approved remote cleanup. Removing the workflow prevents further
 preview uploads. Ordinary source-only CI remains unchanged.
+
+## Approved name-free revision
+
+All four built-in layouts omit visible team names without changing match data,
+event filtering or scores. Classic league-line geometry remains x=90/640,
+y=772.5, width=350, height=2. Panel uses the same existing ID palette on its lines.
+Frame and Stripe retain their existing structure without adding decorative lines.
+No export quality, crop, photographic processing or News template changes.
+
+[Symbol provenance](../render/assets/leagues/symbols/provenance.json) records
+source hashes and crop rectangles. Bundesliga (78) and Serie A (135) are exact
+crops of the user's transparent white assets, rendered without recoloring.
+Champions League (2), Ligue 1 (61) and La Liga (140) copies remove separated text;
+existing white CSS treatment applies. Premier League already has a symbol-only
+asset. Nations League stays unchanged: flag/pole and lettering are not cleanly
+separated, so its text removal needs visual approval or a supplied clean asset.
+Unrecognized league assets are never automatically cropped.
+
+Local review output: `preview-images/symbol-layout-review/`. Seventeen event
+scenarios rotate Classic/Panel/Frame/Stripe; eight additional Classic images
+compare league symbols/colors, including unknown-white fallback. The contact
+sheet labels each template outside its image. QA backgrounds and A/B badges are
+fictional fixtures, not the original reference photo or a representation of the
+named teams. No images or bundles are uploaded. Existing older previews remain.
+
+Validation: 204 tests across six focused suites passed; application and test
+TypeScript checks passed. Real Chromium verified symmetric logo/score geometry,
+name absence and all 17 scenario event bounds in every built-in template.
+White-symbol tests verify unchanged originals, transparency and exact crop pixels.
+The older 7/8 byte-comparison result above describes the preceding design pass;
+this requested layout revision intentionally changes all four Match outputs.
+
+## Approved shared league-logo optical sizing
+
+All four built-ins share a 72x56 CSS-pixel maximum, contained and centered in
+unchanged league wrappers. Reviewed alpha-coverage measurements in
+[league-logo-profiles.json](../render/league-logo-profiles.json) drive one rule in
+[league-logo-sizing.js](../render/league-logo-sizing.js): preserve source aspect
+ratio, fit the shared maximum, then cap painted alpha area at 1000 square pixels.
+This accounts for transparent padding and dense versus sparse marks without
+per-league base-size overrides. The user-approved Premier League optical
+adjustment is described below. Unknown assets use the contained shared box.
+LaLiga becomes approximately 51.7x47.4 pixels, compared with about 92.7x85 in the
+preceding Classic review. No logo pixels, transparency or crops were changed by
+this sizing pass. Custom HTML sizing is intentionally unchanged.
+
+The reviewed metrics describe the five local symbol files and the previously
+cached Premier League symbol. Local-asset tests detect stale measurements if
+those symbols change. A changed upstream Premier League logo should be visually
+reviewed and its measurements refreshed; object-fit still preserves its aspect
+ratio and the shared maximum remains enforced.
+
+Local-only comparison: `preview-images/league-logo-size-review/`. Twenty-four
+actual renderer JPGs cover six leagues across four templates. The comparison
+sheet uses 1:1 crops of the 1080x1350 exports (no thumbnail resizing), including
+an earlier Classic row. Wrapper/team-logo/score/event/accent geometry remains
+unchanged. No images or review artifacts are uploaded or committed.
+
+Premier League visual feedback: its original 150x150 source includes transparent
+side padding (visible width 118px), so equal alpha area appeared narrower than
+other symbols. A bounded 1.15 optical multiplier now makes its image box 56x56px
+(previously 49.287px), about 14% larger in linear size. The same shared maximum
+still applies. Other league sizes, image assets and layout geometry are unchanged.
+Local comparison: `preview-images/premier-league-size-review/`.
+
+## Final publication verification
+
+The final approved source revision includes the four built-in layouts, five
+runtime symbol assets and provenance, shared optical-sizing profiles/helper,
+local-only preview tools and focused tests. The obsolete team-name fitting
+helper/declaration are removed because no built-in renders name labels.
+Original custom white assets are preserved. No generated previews, contact
+sheets, ZIPs, mock review outputs or private photos are included in the current
+tracked tree. Earlier preview files remain in earlier PR commits; no history
+rewrite is part of this publication.
+
+The preview-upload workflow is removed; ordinary CI has no artifact-upload step.
+Local preview instructions above remain supported. The source scenario fixtures
+are test inputs, not generated mock review outputs. No Oracle, database,
+authentication, deployment configuration or unrelated application changes.
+
+Final publication checks (2026-11-10): 337 tests passed across 17 relevant suites;
+application and test TypeScript checks passed; JavaScript syntax and diff checks
+passed. `next build --webpack` passed compilation, type checking, page generation
+and build tracing without database credentials. Default Turbopack could not
+resolve the shared dependency junction outside this isolated worktree; no
+application or deployment config was changed to work around that local limit.
+The default CI build remains unchanged for its normal npm-ci checkout.

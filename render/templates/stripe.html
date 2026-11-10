@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=1080, height=1350, initial-scale=1.0">
+    <meta name="match-teams" content="{{HOME_NAME}} / {{AWAY_NAME}}">
     <title>Stripe</title>
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -10,11 +11,10 @@
         html, body { width: 1080px; height: 1350px; overflow: hidden; background: #000; font-family: 'Oswald', 'Arial Narrow', sans-serif; }
         .template-container { position: relative; width: 1080px; height: 1350px; overflow: hidden; background: #000; }
         .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
-        .league-logo { max-width: 100px; max-height: 85px; object-fit: contain; filter: brightness(0) invert(1) drop-shadow(0 3px 5px rgba(0,0,0,.5)); }
+        .league-logo { width: 72px; height: 56px; max-width: 72px; max-height: 56px; object-fit: contain; filter: brightness(0) invert(1) drop-shadow(0 3px 5px rgba(0,0,0,.5)); }
         .league-logo.no-filter { filter: drop-shadow(0 3px 5px rgba(0,0,0,.5)); }
         .team { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; }
-        .team-name { color: #fff; font-weight: 800; line-height: 1.1; text-align: center; text-transform: uppercase; text-shadow: 0 3px 8px rgba(0,0,0,.7); }
-        .team-logo { object-fit: contain; filter: drop-shadow(0 5px 10px rgba(0,0,0,.65)); }
+.team-logo { object-fit: contain; filter: drop-shadow(0 5px 10px rgba(0,0,0,.65)); }
         .score-text { color: #fff; font-weight: 900; white-space: nowrap; text-align: center; text-shadow: 0 5px 15px rgba(0,0,0,.75); }
         .branding { position: absolute; z-index: 5; color: #fff; text-transform: uppercase; white-space: pre-line; text-align: center; width: max-content; }
         .brand-logo { display: block; }
@@ -22,14 +22,12 @@
         .shade { position: absolute; inset: 0; z-index: 2; background: linear-gradient(to top, rgba(0,0,0,.88) 0%, rgba(0,0,0,.45) 45%, rgba(0,0,0,0) 75%); }
         .branding { bottom: 44px; left: 50%; transform: translateX(-50%); font-size: 30px; font-weight: 600; letter-spacing: 5px; line-height: 1.1; white-space: normal; --brand-logo-h: 80px; --brand-logo-w: 280px; text-shadow: 0 3px 10px rgba(0,0,0,.6); }
         .brand-logo { margin: 0 auto; }
-        .band { position: absolute; left: 0; right: 0; top: 560px; height: 300px; z-index: 3; background: rgba(8,10,14,.82); border-top: 2px solid rgba(255,255,255,.8); border-bottom: 2px solid rgba(255,255,255,.8); }
+        .band { position: absolute; left: 0; right: 0; top: 560px; height: 240px; z-index: 3; background: rgba(8,10,14,.82); border-top: 2px solid rgba(255,255,255,.8); border-bottom: 2px solid rgba(255,255,255,.8); }
         .league-logo-wrapper { position: absolute; z-index: 5; left: 50%; top: 482px; transform: translateX(-50%); width: 120px; height: 60px; display: flex; align-items: center; justify-content: center; }
-        .league-logo { max-height: 56px; }
-        .teams-score { position: absolute; z-index: 5; left: 50%; top: 560px; height: 300px; transform: translateX(-50%); width: 980px; display: grid; grid-template-columns: 1fr 320px 1fr; align-items: center; }
-        .team-logo { width: 150px; height: 150px; margin-bottom: 10px; }
-        .team-name { font-size: 34px; font-weight: 600; width: 280px; letter-spacing: 1px; }
-        .score-text { font-size: 170px; font-weight: 700; line-height: 1; letter-spacing: 2px; }
-        .scorers-section { position: absolute; z-index: 5; left: 50%; top: 892px; transform: translateX(-50%); width: 900px; display: grid; grid-template-columns: 1fr 1fr; gap: 90px; }
+        .teams-score { position: absolute; z-index: 5; left: 50%; top: 560px; height: 240px; transform: translateX(-50%); width: 980px; display: grid; grid-template-columns: 1fr 320px 1fr; align-items: center; }
+        .team-logo { width: 160px; height: 160px; margin-bottom: 0; }
+.score-text { font-size: 170px; font-weight: 700; line-height: 1; letter-spacing: 2px; }
+        .scorers-section { position: absolute; z-index: 5; left: 50%; top: 832px; transform: translateX(-50%); width: 900px; display: grid; grid-template-columns: 1fr 1fr; gap: 90px; }
         .event { font-weight: 600; }
 
         .team-scorers { display: flex; flex-direction: column; gap: 12px; width: 100%; min-height: 20px; max-height: 330px; overflow: hidden; }
@@ -61,9 +59,9 @@
     <div class="band"></div>
     <div class="league-logo-wrapper"><img class="league-logo" src="{{LEAGUE_LOGO}}" alt=""></div>
     <div class="teams-score">
-        <div class="team home-team"><img class="team-logo" src="{{HOME_LOGO}}" alt=""><div class="team-name">{{HOME_NAME}}</div></div>
+        <div class="team home-team"><img class="team-logo" src="{{HOME_LOGO}}" alt=""></div>
         <div class="score-wrapper"><div class="score-text">{{HOME_SCORE}} - {{AWAY_SCORE}}</div></div>
-        <div class="team away-team"><img class="team-logo" src="{{AWAY_LOGO}}" alt=""><div class="team-name">{{AWAY_NAME}}</div></div>
+        <div class="team away-team"><img class="team-logo" src="{{AWAY_LOGO}}" alt=""></div>
     </div>
     <div class="scorers-section">
         <div class="team-scorers left">{{HOME_EVENTS}}</div>

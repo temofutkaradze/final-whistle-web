@@ -9,7 +9,6 @@ import sharp from 'sharp';
 import {chromium} from 'playwright';
 import {pathToFileURL} from 'node:url';
 import {buildEventsHtml} from '../lib/events.mjs';
-import {fitClassicTeamNames} from '../../render/match-layout.js';
 import {referenceScenarios} from '../../tests/fixtures/match-reference-scenarios.mjs';
 import {sampleMatchFields} from '../../src/lib/sample-match.ts';
 import {buildJob} from '../../src/lib/news/parse.ts';
@@ -54,7 +53,7 @@ if(!inspect)for(const baseline of(reviewOnly?[false]:[true,false])){
    const bytes=fs.readFileSync(r.jpg_path);fs.writeFileSync(path.join(output,(baseline?'before-':'after-')+'news-'+layout+'.jpg'),bytes);const sha=crypto.createHash('sha256').update(bytes).digest('hex');(comparisons['news-'+layout]??={})[baseline?'before':'after']=sha;
   }
   if(!baseline){
-   for(const s of referenceScenarios){const r=await server.render(payload(s));const dest=path.join(output,s.id+'.jpg');fs.copyFileSync(r.jpg_path,dest);rows.push({id:s.id,path:dest,html:r.html_path});fs.writeFileSync(path.join(output,'render-manifest.json'),JSON.stringify(rows));}
+   for(const s of referenceScenarios){const template=['classic','panel','frame','stripe'][(s.id-9001)%4];const r=await server.render({...payload(s),template});const dest=path.join(output,s.id+'.jpg');fs.copyFileSync(r.jpg_path,dest);rows.push({id:s.id,template,path:dest,html:r.html_path});fs.writeFileSync(path.join(output,'render-manifest.json'),JSON.stringify(rows));}
    for(const [id,home,away,hs,as,hid,aid]of[[2,'Real Madrid','Manchester City',1,2,541,50],[61,'Paris Saint Germain','Marseille',2,0,85,81],[78,'Bayern Munich','Dortmund',4,0,157,165],[135,'Juventus','Inter',1,1,496,505],[39,'Manchester United','Liverpool',2,1,33,40],[140,'Real Madrid','Barcelona',3,2,541,529],[5,'Georgia','France',1,2,null,null],[999,'Northbridge FC','Southport Athletic',0,0,null,null]]){
     const s={id:'league_'+id,league:id,match:{home_team:home,away_team:away,home_score:hs,away_score:as},events:[]};
     const r=await server.render({...payload(s),...(realLogos&&id!==999?{...(hid&&aid?{home_logo:`https://media.api-sports.io/football/teams/${hid}.png`,away_logo:`https://media.api-sports.io/football/teams/${aid}.png`}:{}),league_logo:`https://media.api-sports.io/football/leagues/${id}.png`}:{})});fs.copyFileSync(r.jpg_path,path.join(output,'league-'+id+'.jpg'));
@@ -79,7 +78,7 @@ if(reviewOnly){console.log(JSON.stringify({output,scenarios:rows.length,leagueEx
 // Inspect actual rendered HTML with real Chromium: loaded Montserrat and bounds.
 const browser=await chromium.launch();
 const geometry=[];
-try{const page=await browser.newPage({viewport:{width:1080,height:1350}});for(const r of rows){await page.goto(pathToFileURL(r.html).href);await page.evaluate(()=>document.fonts.ready);await fitClassicTeamNames(page);geometry.push({id:r.id,...await page.evaluate(()=>{const rect=e=>{const r=e.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right};};return{fontLoaded:[...document.fonts].some(f=>f.family==='Montserrat'&&f.status==='loaded'),lines:[...document.querySelectorAll('.league-line')].map(rect),score:rect(document.querySelector('.score-text')),events:[...document.querySelectorAll('.event')].map(rect),names:[...document.querySelectorAll('.team-name')].map(e=>({...rect(e),scrollWidth:e.scrollWidth}))};})});}}finally{await browser.close();}
+try{const page=await browser.newPage({viewport:{width:1080,height:1350}});for(const r of rows){await page.goto(pathToFileURL(r.html).href);await page.evaluate(()=>document.fonts.ready);geometry.push({id:r.id,...await page.evaluate(()=>{const rect=e=>{const r=e.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right};};return{fontLoaded:[...document.fonts].some(f=>f.family==='Montserrat'&&f.status==='loaded'),lines:[...document.querySelectorAll('.league-line')].map(rect),score:rect(document.querySelector('.score-text')),events:[...document.querySelectorAll('.event')].map(rect),names:[...document.querySelectorAll('.team-name')].map(e=>({...rect(e),scrollWidth:e.scrollWidth}))};})});}}finally{await browser.close();}
 fs.writeFileSync(path.join(output,'verification.json'),JSON.stringify({comparisons,geometry,photoProvided:!!photo,realLogos,output},null,2));
 console.log(JSON.stringify({output,scenarios:rows.length,byteComparisons:comparisons,fontsLoaded:geometry.every(r=>r.fontLoaded),overflow:geometry.filter(r=>r.events.some(e=>e.bottom>1350||e.x<0||e.right>1080)||r.names.some(e=>e.scrollWidth>e.width))},null,2));
 

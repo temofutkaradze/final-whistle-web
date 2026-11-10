@@ -27,8 +27,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { leagueAccents } = require('./league-accents.js');
-const { fitClassicTeamNames } = require('./match-layout.js');
 const { pathToFileURL, fileURLToPath } = require('url');
+const { leagueLogoSize } = require('./league-logo-sizing.js');
 const { checkTemplateHtml, withCsp } = require('./template-check.js');
 const {expandPlaceholders}=require('./final-document.js');
 const {prepareCustomDocument}=require('./custom-resources.js');
@@ -548,15 +548,17 @@ const server = http.createServer(async (req,res) => {
 
       // Decide how the league logo is shown (see LEAGUE_LOGO_DIR comment above)
       const leagueIdMatch = String(d.league_logo || '').match(/leagues\/(\d+)/);
-      const leagueId = leagueIdMatch ? Number(leagueIdMatch[1]) : null;
+      const leagueId = Number.isSafeInteger(d.league_id) && d.league_id > 0 ? d.league_id : leagueIdMatch ? Number(leagueIdMatch[1]) : null;
       let leagueLogoSrc = d.league_logo;
       let leagueLogoClass = 'league-logo';
       let leagueLogoIsRemote = true;
       if (leagueId) {
-        const localLogo = path.join(LEAGUE_LOGO_DIR, `${leagueId}.png`);
+        const symbolLogo = path.join(LEAGUE_LOGO_DIR, 'symbols', `${leagueId}.png`);
+        const useSymbol = !isCustom && fs.existsSync(symbolLogo);
+        const localLogo = useSymbol ? symbolLogo : path.join(LEAGUE_LOGO_DIR, `${leagueId}.png`);
         if (fs.existsSync(localLogo)) {
           leagueLogoSrc = pathToFileURL(localLogo).href;
-          leagueLogoClass += ' no-filter';
+          if (!useSymbol || KEEP_ORIGINAL_COLOR_LEAGUES.has(leagueId)) leagueLogoClass += ' no-filter';
           leagueLogoIsRemote = false;
         } else if (KEEP_ORIGINAL_COLOR_LEAGUES.has(leagueId)) {
           leagueLogoClass += ' no-filter';
@@ -612,7 +614,9 @@ const server = http.createServer(async (req,res) => {
 
       html = expandPlaceholders(html,replacements);
 
-      html = html.replace('class="league-logo"', `class="${leagueLogoClass}"`);
+      const leagueSize = !isCustom ? leagueLogoSize(leagueId) : null;
+      const leagueSizeStyle = leagueSize ? ` style="width:${leagueSize.width}px;height:${leagueSize.height}px"` : '';
+      html = html.replace('class="league-logo"', `class="${leagueLogoClass}"${leagueSizeStyle}`);
 
       // Last transformation: canonical checked bytes + immutable image manifest.
       // Never interpolate or otherwise mutate HTML after this boundary.
@@ -665,7 +669,6 @@ const server = http.createServer(async (req,res) => {
             if(isCustom) await guardPage(page, remoteOk, htmlPath, customManifest);
             await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 60000 });
             await waitUntilReady(page);
-            if (!isCustom && templatePathFor(d.template) === templatePathFor('classic')) await fitClassicTeamNames(page);
             tPageReady = Date.now();
 
             // High-resolution intermediate (2160x2700), returned as a buffer (no disk write)
