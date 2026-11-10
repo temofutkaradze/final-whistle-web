@@ -10,7 +10,7 @@ async function fixture(leagueId=39){
   const fetchImpl=vi.fn(async(url:unknown,_init?:RequestInit)=>{const u=new URL(String(url)),code=u.pathname.split('/')[3];const value=structuredClone(u.pathname.endsWith('/teams')?teams:raw);value.competition.code=code;return new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});});
   const download=vi.fn(async(_url:string,_options?:unknown)=>({body:Buffer.from(t.leagueLogo,'base64'),contentType:'image/png',headers:{}}));
   const provider=()=>createFootballDataProvider({apiKey:'fictional-test-key',fetchImpl:fetchImpl as typeof fetch,download,now:()=>clock})!;
-  return {t,raw,teams,fetchImpl,download,provider,tick:(ms:number)=>clock+=ms};
+  return {t,raw,teams,fetchImpl,download,provider,tick:(ms:number)=>clock+=ms,setClock:(value:number)=>clock=value};
 }
 describe('football-data.org current-season provider (mocked HTTP only)',()=>{
   it('requires a server-side key; missing/blank keys do not call any API',()=>{expect(createFootballDataProvider({})).toBeNull();expect(createFootballDataProvider({apiKey:' '})).toBeNull();});
@@ -74,5 +74,16 @@ describe('Champions League overall league-phase provider',()=>{
     for(const change of [(f:Awaited<ReturnType<typeof fixture>>)=>{f.raw.standings[0].group='Group A';},(f:Awaited<ReturnType<typeof fixture>>)=>{f.raw.standings[0].type='HOME';},(f:Awaited<ReturnType<typeof fixture>>)=>{f.raw.standings.push(f.raw.standings[0]);},(f:Awaited<ReturnType<typeof fixture>>)=>{f.raw.season.endDate='2024-01-01';}]){
       const f=await fixture(2);change(f);await expect(f.provider().getCurrentTable(2)).rejects.toThrow('unavailable');expect(f.download).not.toHaveBeenCalled();
     }
+  });
+});
+
+
+describe('provider inclusive season date boundaries',()=>{
+  it('loads the final matchday, rejects the next midnight before artwork, and accepts a new season',async()=>{
+    const f=await fixture();const end='2027-05-30';f.raw.season.startDate='2026-08-21';f.raw.season.endDate=end;f.teams.season={...f.raw.season};
+    f.setClock(Date.parse(end+'T23:59:59.999Z'));
+    const p=f.provider();expect((await p.getCurrentTable(39)).seasonEnd).toBe(end);
+    f.download.mockClear();f.tick(1);await expect(p.getCurrentTable(39)).rejects.toThrow('unavailable');expect(f.download).not.toHaveBeenCalled();
+    f.raw.season={id:124,startDate:'2027-05-31',endDate:'2028-05-01'};f.teams.season={...f.raw.season};expect((await p.getCurrentTable(39)).seasonStart).toBe('2027-05-31');
   });
 });

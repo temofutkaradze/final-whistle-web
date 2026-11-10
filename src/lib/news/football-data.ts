@@ -4,7 +4,7 @@ import { uclOrderProblem } from './ucl-order.ts';
 import { createRequire } from 'node:module';
 import { downloadPublicResource } from '../../../render/security.js';
 import { footballDataCodes, mapFootballData, isOverallStanding } from './standings-adapters.ts';
-import { StandingsError, validTeamCount, type StandingsProvider } from './standings.ts';
+import { StandingsError, validTeamCount, seasonEndExclusive, type StandingsProvider } from './standings.ts';
 const require=createRequire(import.meta.url);
 const {validateMatchImage}=require('../../../render/security.js') as {validateMatchImage:(b:Buffer)=>Promise<{format:string;width:number;height:number;pages:number}>};
 const ORIGIN='https://api.football-data.org';
@@ -73,8 +73,8 @@ export function createFootballDataProvider({apiKey,fetchImpl=fetch,now=Date.now,
       if(data?.competition?.code!==code||totals.length!==1||!Array.isArray(totals[0].table))throw unavailable();
       const rows=totals[0].table;
       const teams=await request<TeamsResponse>(code,'teams',deadline);
-      const time=now(),start=Date.parse(data.season?.startDate),end=Date.parse(data.season?.endDate);
-      if(!Number.isFinite(start)||!Number.isFinite(end)||start>time||end<time||end<=start||end-start>400*86400_000||!Number.isSafeInteger(data.season?.id)||teams?.competition?.code!==code||teams.season?.id!==data.season.id||teams.season.startDate!==data.season.startDate||teams.season.endDate!==data.season.endDate||!Array.isArray(teams.teams)||!validTeamCount(leagueId,teams.count)||teams.count!==teams.teams.length||rows.length!==teams.count)throw unavailable();
+      const time=now(),start=Date.parse(data.season?.startDate),end=Date.parse(data.season?.endDate),endExclusive=seasonEndExclusive(data.season?.endDate);
+      if(!Number.isFinite(start)||!Number.isFinite(end)||start>time||!Number.isFinite(endExclusive)||time>=endExclusive||end<=start||end-start>400*86400_000||!Number.isSafeInteger(data.season?.id)||teams?.competition?.code!==code||teams.season?.id!==data.season.id||teams.season.startDate!==data.season.startDate||teams.season.endDate!==data.season.endDate||!Array.isArray(teams.teams)||!validTeamCount(leagueId,teams.count)||teams.count!==teams.teams.length||rows.length!==teams.count)throw unavailable();
       if(leagueId===2){
         const problem=uclOrderProblem(rows.map((r,i)=>({position:r.position,teamId:String(r.team?.id),displayRow:i+1})),data.season.startDate);
         if(problem)throw new StandingsError('STANDINGS_ORDER',problem+'. Please try later or ask the account owner to review the source.');

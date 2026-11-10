@@ -17,6 +17,14 @@ export function parsePositions(value:string):number[]{
   if(positions.some(n=>!Number.isSafeInteger(n)||n<1||n>64))throw new StandingsError('STANDINGS_POSITIONS','Positions must be positive whole numbers within the selected league.');
   return positions;
 }
+// Date-only provider values include the whole UTC calendar day; timestamps stay exact.
+export function seasonEndExclusive(value:unknown):number{
+  if(typeof value!=='string')return NaN;
+  const time=Date.parse(value);
+  if(!Number.isFinite(time))return NaN;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(value))return new Date(time).toISOString().slice(0,10)===value?time+86400_000:NaN;
+  return time;
+}
 export type StandingRow={position:number;displayRow?:number;teamId:string;name:string;played:number;goalDifference:number;points:number;crest:string};
 // Logos are approved raster bytes encoded as base64, never URLs or SVG markup.
 export type StandingsTable={leagueId:number;seasonStart:string;seasonEnd:string;source:string;fetchedAt:number;leagueLogo:string;totalTeams:number;rows:StandingRow[]};
@@ -24,8 +32,8 @@ export type StandingsJob={layout:'standings';author:string;quote:string;caption:
 export function validateTable(table:StandingsTable,leagueId:number,now=Date.now(),selected=false):StandingsTable{
   const fail=()=>{throw new StandingsError('STANDINGS_DATA','Current standings are incomplete, ambiguous or unavailable. Please try later.');};
   if(!table||!standingsLeagues.some(l=>l.id===leagueId)||table.leagueId!==leagueId||typeof table.source!=='string'||!table.source.trim()||table.source.length>160||!Number.isFinite(table.fetchedAt)||table.fetchedAt>now+60_000||now-table.fetchedAt>60*60_000)fail();
-  const start=Date.parse(table.seasonStart),end=Date.parse(table.seasonEnd);
-  if(!Number.isFinite(start)||!Number.isFinite(end)||start>now||end<now||end<=start||end-start>400*86400_000)fail();
+  const start=Date.parse(table.seasonStart),end=Date.parse(table.seasonEnd),endExclusive=seasonEndExclusive(table.seasonEnd);
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start>now||!Number.isFinite(endExclusive)||now>=endExclusive||end<=start||end-start>400*86400_000)fail();
   if(!Array.isArray(table.rows)||table.rows.length<(selected?1:2)||table.rows.length>64||!validTeamCount(leagueId,table.totalTeams)||table.rows.length>table.totalTeams||(!selected&&table.rows.length!==table.totalTeams)||!rasterBase64(table.leagueLogo))fail();
   const ranks=new Set(),teams=new Set(),displayRows=new Set();
   for(const r of table.rows){
@@ -56,7 +64,7 @@ export function createStandingsService(provider:StandingsProvider|null,now=Date.
     let table=cache.get(leagueId)?.table;
     if(!table||cache.get(leagueId)!.expires<=now()){
       let work=inflight.get(leagueId);
-      if(!work){work=Promise.resolve().then(()=>provider.getCurrentTable(leagueId)).then(t=>{validateTable(t,leagueId,now());const copy=structuredClone(t);cache.set(leagueId,{table:copy,expires:Math.min(now()+15*60_000,Date.parse(t.seasonEnd))});return copy;}).catch(error=>{if(error instanceof StandingsError)throw error;throw new StandingsError('STANDINGS_UNAVAILABLE','The current standings source is unavailable. No historical or example data was substituted.');}).finally(()=>inflight.delete(leagueId));inflight.set(leagueId,work);}
+      if(!work){work=Promise.resolve().then(()=>provider.getCurrentTable(leagueId)).then(t=>{validateTable(t,leagueId,now());const copy=structuredClone(t);cache.set(leagueId,{table:copy,expires:Math.min(now()+15*60_000,seasonEndExclusive(t.seasonEnd))});return copy;}).catch(error=>{if(error instanceof StandingsError)throw error;throw new StandingsError('STANDINGS_UNAVAILABLE','The current standings source is unavailable. No historical or example data was substituted.');}).finally(()=>inflight.delete(leagueId));inflight.set(leagueId,work);}
       table=await work;
     }
     validateTable(table,leagueId,now());
@@ -65,14 +73,18 @@ export function createStandingsService(provider:StandingsProvider|null,now=Date.
   };
 }
 export type StandingsPending={kind:'standings';background?:string;leagueId?:number;positions?:number[];ts:number};
-export function standingsTransition(msg:{text?:string;caption?:string;photo?:{file_id:string}[];document?:{file_id:string;mime_type?:string}},raw:unknown,now:number):null|{pending:StandingsPending|null;reply:string}|{pending:null;background:string;request:{leagueId:number;positions:number[]}}{
+export function standingsTransition(msg:{text?:string;caption?:string;photo?:{file_id:string}[];document?:{file_id:string;mime_type?:string}},raw:unknown,now:number):null|{pending:StandingsPending|null;reply:string}|{pending:null;background:string;request:{leagueId:number;positions:number[]};collection:StandingsPending}{
   let p=raw&&typeof raw==='object'&&(raw as StandingsPending).kind==='standings'?raw as StandingsPending:null;
   if(p&&now-p.ts>60*60_000)p=null;
   const file=msg.document?.mime_type?.match(/^image\/(jpeg|png|webp)$/)?msg.document.file_id:msg.photo?.at(-1)?.file_id;
   let text=(msg.text??msg.caption??'').trim();
   const command=/^\/standings(?:@\w+)?(?:\s|$)/i.test(text);
   const direct=Object.keys(aliases).sort((a,b)=>b.length-a.length).find(alias=>text.toLowerCase()===alias||text.toLowerCase().startsWith(alias+' ')||text.toLowerCase().startsWith(alias+'\n'));
-  if(!p&&!command&&!direct&&!(file&&/\d+(?:[\s,]+\d+)*$/.test(text)))return null;
+  if(!p&&!command){
+    if(!direct)return null;
+    const selection=text.slice(direct.length).trim();
+    if(selection){try{parsePositions(selection);}catch{return null;}}
+  }
   if(/^\/cancel(?:@\w+)?$/i.test(text))return {pending:null,reply:'Standings cancelled. Send a new background for a News post.'};
   if(/^\/(help|start)(?:@\w+)?$/i.test(text))return {pending:p,reply:'Standings: send a photo, league and selection numbers, or /cancel to return to News.\n'+UCL_ROW_HELP};
   if(/^\//.test(text)&&!command)return {pending:p,reply:'Finish standings or use /cancel before another News command.'};
@@ -89,5 +101,5 @@ export function standingsTransition(msg:{text?:string;caption?:string;photo?:{fi
   if(!p.background)return {pending:p,reply:'Send the background photo or an image file.'+(p.leagueId===2?'\n'+UCL_ROW_HELP:'')};
   if(!p.leagueId)return {pending:p,reply:'Send the league name.'};
   if(!p.positions)return {pending:p,reply:p.leagueId===2?UCL_ROW_HELP+'\nSend display row numbers, for example: 28 29 30 31.':'Send positions, for example: 1 2 3.'};
-  return {pending:null,background:p.background,request:{leagueId:p.leagueId,positions:p.positions}};
+  return {pending:null,background:p.background,request:{leagueId:p.leagueId,positions:p.positions},collection:p};
 }

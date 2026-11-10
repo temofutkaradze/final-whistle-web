@@ -52,7 +52,16 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       if('request' in transition){
         // Resolve before downloading; disabled sources never process the user's photo.
         try{transition={pending:null,background:transition.background,circle:null,job:await standings(transition.request.leagueId,transition.request.positions)};}
-        catch(error){if(error instanceof StandingsError){await reply(error.message);return;}throw error;}
+        catch(error){
+          if(error instanceof StandingsError){
+            // Retain this request's latest photo, never an older collection. Do not
+            // overwrite a newer update or a revoked connection while the API awaited.
+            const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:transition.collection}});
+            if(saved.count&&isActive())await reply(error.message);
+            return;
+          }
+          throw error;
+        }
       }
       const state='job' in transition?{stage:'rendering',requestId:update.update_id}:transition.pending??{};
       const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:state}});

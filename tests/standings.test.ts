@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {parsePositions,identifyLeague,standingsTransition,createStandingsService,validateTable,selectPositions,DISABLED_MESSAGE} from '../src/lib/news/standings';
+import {parsePositions,identifyLeague,standingsTransition,createStandingsService,validateTable,selectPositions,DISABLED_MESSAGE,seasonEndExclusive} from '../src/lib/news/standings';
 import {mapFootballData} from '../src/lib/news/standings-adapters';
 import {buildStandingsHtml} from '../src/lib/news/standings-html';
 import {fictionalTable} from './standings-fixture';
@@ -18,12 +18,12 @@ describe('standings conversation',()=>{
   const now=Date.now(),photo={photo:[{file_id:'small'},{file_id:'largest'}]};
   it('supports one caption and two-line captions',()=>{for(const caption of ['Premier League 15 16 17 18','Premier League\n15 16 17 18'])expect(standingsTransition({...photo,caption},null,now)).toMatchObject({background:'largest',request:{leagueId:39,positions:[15,16,17,18]}});});
   it('supports photo then league then ordered positions and explicit standings-first',()=>{const league=standingsTransition({text:'La Liga'},{background:'saved',ts:now},now)!;expect(league).toMatchObject({pending:{kind:'standings',background:'saved',leagueId:140}});expect(standingsTransition({text:'20 1 2'},league.pending,now)).toMatchObject({background:'saved',request:{positions:[20,1,2]}});const start=standingsTransition({text:'/standings Premier League 1 2'},null,now)!;expect(start).toMatchObject({reply:expect.stringContaining('background')});expect(standingsTransition(photo,start.pending,now)).toMatchObject({request:{leagueId:39}});});
-  it('does not hijack ordinary News; rejects unknown leagues and supports cancel/expiry',()=>{expect(standingsTransition({...photo,caption:'ordinary ignored news caption'},null,now)).toBeNull();expect(standingsTransition({text:'Author | Headline'},null,now)).toBeNull();expect(standingsTransition({...photo,caption:'Unknown League 1 2'},null,now)).toMatchObject({reply:expect.stringContaining('Choose')});const pending={kind:'standings',ts:now,background:'x',leagueId:39};expect(standingsTransition({text:'/cancel'},pending,now)).toMatchObject({pending:null});expect(standingsTransition({text:'1 2'},{...pending,ts:0},now)).toBeNull();});
+  it('does not hijack ordinary News; rejects unknown leagues and supports cancel/expiry',()=>{expect(standingsTransition({...photo,caption:'ordinary ignored news caption'},null,now)).toBeNull();expect(standingsTransition({text:'Author | Headline'},null,now)).toBeNull();expect(standingsTransition({...photo,caption:'Unknown League 1 2'},null,now)).toBeNull();const pending={kind:'standings',ts:now,background:'x',leagueId:39};expect(standingsTransition({text:'/cancel'},pending,now)).toMatchObject({pending:null});expect(standingsTransition({text:'1 2'},{...pending,ts:0},now)).toBeNull();});
 });
 
 function bot(service?:ReturnType<typeof createStandingsService>){
   const settings:any={userId:'owner',botToken:'test-token',telegramChatId:'42',pending:null,lastUpdateId:null,defaultTemplateRef:'single'};
-  const table={findUnique:vi.fn(async()=>structuredClone(settings)),updateMany:vi.fn(async({where,data}:any)=>{if(where.botToken!==settings.botToken||('telegramChatId' in where&&where.telegramChatId!==settings.telegramChatId)||where.OR&&settings.lastUpdateId!==null&&settings.lastUpdateId>=where.OR[1].lastUpdateId.lt)return {count:0};Object.assign(settings,data);return {count:1};})};
+  const table={findUnique:vi.fn(async()=>structuredClone(settings)),updateMany:vi.fn(async({where,data}:any)=>{if(('lastUpdateId' in where&&where.lastUpdateId!==settings.lastUpdateId)||where.botToken!==settings.botToken||('telegramChatId' in where&&where.telegramChatId!==settings.telegramChatId)||where.OR&&settings.lastUpdateId!==null&&settings.lastUpdateId>=where.OR[1].lastUpdateId.lt)return {count:0};Object.assign(settings,data);return {count:1};})};
   const tg={sendMessage:vi.fn(async()=>({ok:true})),sendDocument:vi.fn(async()=>({ok:true}))},download=vi.fn(async()=>Buffer.from('photo')),render=vi.fn(async(_job:unknown,_background:Buffer,_circle:Buffer|null)=>'/fake/news_test.jpg'),cleanup=vi.fn(async()=>{});
   const handle=createNewsHandler({prisma:{newsSettings:table},ownerId:'owner',connectionToken:'test-token',tg,download,render,cleanup,standings:service,onDiagnostic:vi.fn()});
   const update=(id:number,message:object,chat=42)=>({update_id:id,message:{chat:{type:'private',id:chat},from:{id:chat},...message}});
@@ -80,5 +80,76 @@ describe('UCL official ties and display-row semantics',()=>{
   it('explains row selection in Telegram collection and authorized help',async()=>{
     expect(standingsTransition({text:'UCL'},{background:'photo',ts:Date.now()},Date.now())).toMatchObject({reply:expect.stringContaining('display rows 1-36')});
     const f=bot();await f.handle(f.update(1,{text:'/help'}));expect(f.tg.sendMessage).toHaveBeenCalledWith('42',expect.stringContaining('28, 29, 29, 31'));
+  });
+});
+
+
+describe('pre-merge News routing and photo-state regressions',()=>{
+  for(const text of ['Premier League | Title','La Liga | Title','Champions League | Title'])it('preserves ordinary News input '+text,async()=>{
+    const source=vi.fn(()=>fictionalTable());const f=bot(createStandingsService({id:'fictional',getCurrentTable:source}));
+    await f.handle(f.update(1,{photo:[{file_id:'news-background'}]}));await f.handle(f.update(2,{text}));
+    expect(source).not.toHaveBeenCalled();expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0][0]).not.toMatchObject({layout:'standings'});expect(f.tg.sendDocument).toHaveBeenCalledTimes(1);
+  });
+  it('requires unambiguous implicit selection but keeps explicit validation',()=>{
+    const now=Date.now();for(const text of ['Premier League | Title','Premier League news','Premier League 1 x','Premier League 0'])expect(standingsTransition({text},null,now)).toBeNull();
+    expect(standingsTransition({text:'Premier League'},null,now)).toMatchObject({pending:{leagueId:39}});
+    expect(standingsTransition({text:'/standings Premier League 0'},null,now)).toMatchObject({reply:expect.stringContaining('positive')});
+  });
+  it('retains photo B after invalid selection, deduplicates, then uses B on correction',async()=>{
+    const f=bot(createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}));
+    await f.handle(f.update(1,{photo:[{file_id:'photo-A'}]}));await f.handle(f.update(2,{text:'Premier League'}));
+    const invalid=f.update(3,{photo:[{file_id:'photo-B'}],caption:'Premier League 21'});await f.handle(invalid);await f.handle(invalid);
+    expect(f.settings.pending).toMatchObject({kind:'standings',background:'photo-B',leagueId:39,positions:[21]});expect(f.download).not.toHaveBeenCalled();
+    const corrected=f.update(4,{text:'1 2'});await f.handle(corrected);await f.handle(corrected);
+    expect(f.download).toHaveBeenCalledExactlyOnceWith('photo-B');expect(f.tg.sendDocument).toHaveBeenCalledTimes(1);expect(f.settings.pending.stage).toBe('delivered');
+  });
+  it('cancels a failed collection and starts a fresh News conversation',async()=>{
+    const f=bot(createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}));
+    await f.handle(f.update(1,{photo:[{file_id:'photo-B'}],caption:'Premier League 21'}));await f.handle(f.update(2,{text:'/cancel'}));expect(f.settings.pending).toEqual({});
+    await f.handle(f.update(3,{photo:[{file_id:'photo-C'}]}));await f.handle(f.update(4,{text:'Author | New story'}));expect(f.download).toHaveBeenCalledExactlyOnceWith('photo-C');expect(f.render.mock.calls[0][0]).not.toMatchObject({layout:'standings'});
+  });
+  it('starts a new standings conversation after cancellation',async()=>{
+    const f=bot(createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}));
+    await f.handle(f.update(1,{photo:[{file_id:'old'}],caption:'Premier League 21'}));await f.handle(f.update(2,{text:'/cancel'}));
+    await f.handle(f.update(3,{photo:[{file_id:'new'}],caption:'Premier League 1 2'}));expect(f.download).toHaveBeenCalledExactlyOnceWith('new');expect(f.tg.sendDocument).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('standings authorization and revocation regressions',()=>{
+  for(const kind of ['group','sender-mismatch','revoked-token','unlinked'])it('blocks '+kind+' before provider, download, render and delivery',async()=>{
+    const source=vi.fn(()=>fictionalTable());const f=bot(createStandingsService({id:'fictional',getCurrentTable:source}));
+    if(kind==='revoked-token')f.settings.botToken='replacement-test-token';if(kind==='unlinked')f.settings.telegramChatId=null;
+    const u=f.update(1,{photo:[{file_id:'photo'}],caption:'Premier League 1 2'});
+    if(kind==='group')u.message.chat.type='group';if(kind==='sender-mismatch')u.message.from.id=99;
+    await f.handle(u);expect(source).not.toHaveBeenCalled();expect(f.download).not.toHaveBeenCalled();expect(f.render).not.toHaveBeenCalled();expect(f.tg.sendDocument).not.toHaveBeenCalled();
+  });
+  it('does not overwrite state or render after connection revocation during provider work',async()=>{
+    let f:ReturnType<typeof bot>;const service=createStandingsService({id:'fictional',getCurrentTable:async()=>{f.settings.botToken='replacement';return fictionalTable();}});f=bot(service);
+    await f.handle(f.update(1,{photo:[{file_id:'photo'}],caption:'Premier League 1 2'}));expect(f.download).not.toHaveBeenCalled();expect(f.render).not.toHaveBeenCalled();expect(f.tg.sendDocument).not.toHaveBeenCalled();expect(f.settings.pending).toBeNull();
+  });
+  it('does not save failed-request state or reply after revocation during provider work',async()=>{
+    let f:ReturnType<typeof bot>;f=bot(createStandingsService({id:'fictional',getCurrentTable:async()=>{f.settings.botToken='replacement';throw Error('unavailable');}}));
+    await f.handle(f.update(1,{photo:[{file_id:'photo'}],caption:'Premier League 1 2'}));expect(f.settings.pending).toBeNull();expect(f.tg.sendMessage).not.toHaveBeenCalled();expect(f.download).not.toHaveBeenCalled();expect(f.render).not.toHaveBeenCalled();expect(f.tg.sendDocument).not.toHaveBeenCalled();
+  });
+  it('blocks delivery when connection is revoked during rendering',async()=>{
+    const f=bot(createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}));f.render.mockImplementationOnce(async()=>{f.settings.telegramChatId=null;return '/fake/news_test.jpg';});
+    await f.handle(f.update(1,{photo:[{file_id:'photo'}],caption:'Premier League 1 2'}));expect(f.render).toHaveBeenCalledTimes(1);expect(f.tg.sendDocument).not.toHaveBeenCalled();expect(f.cleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('inclusive season-end boundaries',()=>{
+  it('includes the final calendar day, rejects immediately after, and validates dates',async()=>{
+    const midnight=Date.parse('2027-05-31T00:00:00Z');const table=await fictionalTable(39,midnight-1);table.seasonStart='2026-08-21';table.seasonEnd='2027-05-30';
+    expect(seasonEndExclusive(table.seasonEnd)).toBe(midnight);expect(validateTable(table,39,midnight-1)).toBe(table);expect(()=>validateTable(table,39,midnight)).toThrow();
+    expect(Number.isNaN(seasonEndExclusive('2027-02-30'))).toBe(true);expect(Number.isNaN(seasonEndExclusive(null))).toBe(true);
+    expect(seasonEndExclusive('2027-05-30T15:00:00Z')).toBe(Date.parse('2027-05-30T15:00:00Z'));
+  });
+  it('caches during the final day but refetches at expiry and accepts the next season',async()=>{
+    let clock=Date.parse('2027-05-30T23:50:00Z');let next=false;
+    const source=vi.fn(async()=>{const t=await fictionalTable(39,clock);t.seasonStart=next?'2027-05-31':'2026-08-21';t.seasonEnd=next?'2028-05-01':'2027-05-30';return t;});
+    const service=createStandingsService({id:'fictional',getCurrentTable:source},()=>clock);
+    await service(39,[1]);clock+=5*60_000;await service(39,[1]);expect(source).toHaveBeenCalledTimes(1);
+    clock=Date.parse('2027-05-31T00:00:00Z');await expect(service(39,[1])).rejects.toThrow();expect(source).toHaveBeenCalledTimes(2);
+    next=true;const job=await service(39,[1]);expect(job.standings.seasonStart).toBe('2027-05-31');expect(source).toHaveBeenCalledTimes(3);
   });
 });

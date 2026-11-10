@@ -94,7 +94,7 @@ A two-line caption also works. Conversation alternatives:
 2. Send `/standings`; provide the league, positions and photo as prompted.
 3. Send `/standings La Liga 1 5 10 20`; then send the photo.
 
-Use `/cancel` to return to ordinary News. Recognized league names: Premier League/EPL, La Liga/LaLiga, Serie A, Bundesliga, Ligue 1, Champions League/UEFA Champions League/UCL/CL. Selection numbers are unique positive integers in requested order and are checked against the complete actual table. Domestic numbers mean official positions; UCL numbers mean display rows 1-36, with official tied ranks retained. Unsupported leagues or malformed positions receive a prompt; no guessing/fallback occurs. Collection expires after one hour. Existing ordinary News captions and commands remain intact outside standings mode.
+Use `/cancel` to return to ordinary News. Recognized league names: Premier League/EPL, La Liga/LaLiga, Serie A, Bundesliga, Ligue 1, Champions League/UEFA Champions League/UCL/CL. Selection numbers are unique positive integers in requested order and are checked against the complete actual table. Domestic numbers mean official positions; UCL numbers mean display rows 1-36, with official tied ranks retained. Outside standings mode, only an exact league name or a league followed by valid numeric selection syntax activates the flow implicitly. Ordinary News text such as `Premier League | Title` stays in News. Use `/standings` explicitly for other input; unsupported leagues or malformed positions then receive a prompt. No guessing/fallback occurs. Collection expires after one hour. Existing ordinary News captions and commands remain intact outside standings mode.
 
 If the key is missing, a complete request receives an explicit source-configuration message before downloading or rendering the photo. HTTP/authentication/rate-limit failures receive sanitized errors; no sample data is sent instead.
 
@@ -125,9 +125,17 @@ The preview generator runs a temporary local renderer on an ephemeral port with 
 
 ### Verified local results
 
-- Full JavaScript/TypeScript suite: **618 tests passed, 46 files**, with `npm.cmd exec vitest run -- --maxWorkers=2`. An unrestricted parallel run timed out in the existing Match layout test under concurrent browser/build load; no test timeout was increased or disabled. Reducing worker contention allowed the complete suite to pass.
+- Full JavaScript/TypeScript suite: **635 tests passed, 46 files**, with `npm.cmd exec vitest run -- --maxWorkers=2`. An unrestricted parallel run timed out in the existing Match layout test under concurrent browser/build load; no test timeout was increased or disabled. Reducing worker contention allowed the complete suite to pass.
 - Provider regressions include verified domestic Matchday and UCL League phase labels, all six codes, 18-team, 20-team and 36-team tables, rejected group/knockout stages, official ties and valid skipped ranks, rejected inconsistent rank sequences, display-row selection and unknown/reversed tie-order guards, single-row selection, shared cache/in-flight behavior, 10/minute admission, 429 cooldowns, authentication failures, malformed/oversized data, season and team-set mismatches, unsafe artwork and concurrency. Existing News/standings/real-renderer checks passed as part of the complete suite.
 - `npm.cmd run typecheck`: passed for application and tests.
 - Production build: `npm.cmd run build -- --webpack` passed. Default local Turbopack could not resolve dependencies through this isolated worktree's external node_modules junction; no deployment/build configuration was changed to accommodate that local setup.
 - Generated and inspected actual 1080x1350 JPEG examples with 2/3/4 rows and a contact sheet. Real renderer tests additionally cover 1, 20 and 36 rows, 4:4:4 output, embedded ICC and unsafe SVG rejection.
 - Live football-data.org access and raster loading are verified above. Real Telegram delivery has not been exercised. Five TheSportsDB read-only requests verified only its five-row limitation. Match API-Football and OCI are unchanged.
+
+
+## Pre-merge review corrections
+
+- Implicit routing is limited to league-only input or league plus valid numeric syntax. Existing News author/headline text is preserved. Numeric selections still require actual-table validation.
+- A source or selection failure retains the latest background, league and collection state for correction. Saving is conditional on the connection and claimed update still matching; it cannot replace a newer update or revoked connection. `/cancel` clears the collection. Successful jobs still consume input before rendering, and ambiguous delivery is never automatically retried.
+- Date-only season end values include the whole UTC calendar day. Provider validation, domain validation and table-cache expiry share an exclusive next-midnight boundary. At that boundary, expired data is rejected/refetched; a verified new season may be accepted. Timestamp end values keep their exact boundary. Historical seasons and invalid date-only values remain rejected.
+- Regression coverage includes News routing through the bot handler, photo A/new photo B/invalid selection/correction, cancellation and fresh conversations, unauthorized groups, mismatched senders, revoked connections before/during provider work and rendering, and final-day/cache/season-transition boundaries. All data and Telegram clients in these regressions are fictional/mocked.
