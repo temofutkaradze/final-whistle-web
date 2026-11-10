@@ -711,3 +711,18 @@ retry logic, Issue #11 write path or billing guard was relaxed. A new audit can
 clarify errors but cannot manufacture the missing Oracle evidence. All four
 checks remain release blockers until independently satisfied; keep the enable
 variable false and do not merge/activate on diagnostic success alone.
+
+
+#### Live diagnostic verification
+
+[Read-only run 42738105375](https://github.com/temofutkaradze/final-whistle-web/actions/runs/42738105375)
+executed code revision `af541cf`. The regression-test step passed; normal PR CI
+also passed. The artifact confirms HTTP **404** / NotAuthorizedOrNotFound from
+OSP `list_subscriptions`, with no plan observed. Quota LIST succeeded and the
+expected policy-name match count was **0**, resolving the prior missing-versus-
+ambiguous uncertainty: no policy with the required name was returned. All three
+usage/cost reads succeeded and each returned **0** rows. All four safety gates
+remain BLOCKED. The audit's failure conclusion is expected evidence failure,
+not a failed mocked test. The provision job was SKIPPED; no launch was attempted.
+Issue #11 remained ready/revision 0, and the enable variable remained false.
+This confirms the diagnostic fix, not subscription access or billing eligibility.
