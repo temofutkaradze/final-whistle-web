@@ -568,3 +568,27 @@ an undocumented boolean-AND quota grammar. The preceding global zero leaves no
 allowance in other ADs/regions; target preflight independently verifies that this
 exact AD belongs to the ready Paris home region. Console acceptance and effective
 quota reads remain mandatory before any enforcement claim for the real tenancy.
+
+
+### Live verification of the evidence-controls PR
+
+Code revision `cddc2b1` was tested in
+[read-only run 42731176964](https://github.com/temofutkaradze/final-whistle-web/actions/runs/42731176964).
+**111 mocked tests passed** locally and the GitHub regression step passed; normal
+PR CI check passed at this code revision. Python syntax, workflow YAML, unchanged
+10-minute cron/concurrency/permissions assertions and diff checks passed.
+
+PASS: configuration, home region, target compartment, network, Ubuntu ARM64
+image, A1 compatibility, service/quota headroom, inventory reads, exact payload,
+observed A1/storage envelopes, USAGE/USAGE_ONLY/COST API access and duplicate state.
+
+BLOCKED: subscription (`NotAuthorizedOrNotFound`), quota-policy reads
+(`NotAuthorizedOrNotFound`), remaining monthly allowance (all usage/cost queries
+returned no rows), prospective Balanced VPU treatment and therefore external
+allocation enforcement. Service headroom PASS is NOT root allocation control
+PASS. The audit correctly failed overall, preserving its redacted report.
+
+Provision job SKIPPED; activation_ready=false. No matching VM was found. Issue
+#11 remained ready, revision 0. No cloud/IAM resource, secret, billing setting or
+GitHub enable variable was modified. The policy statements above are manual
+administrator setup instructions, NOT changes already applied to the tenancy.
