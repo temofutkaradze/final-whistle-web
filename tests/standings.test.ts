@@ -55,3 +55,30 @@ describe('Champions League Telegram and domain validation',()=>{
     expect(job.standings.rows.map(r=>r.position)).toEqual([36,1]);
   });
 });
+
+describe('UCL official ties and display-row semantics',()=>{
+  async function tied(){const table=await fictionalTable(2);table.rows[28].teamId='1899';table.rows[29].teamId='721';table.rows[29].position=29;return table;}
+  it('retains tied ranks in arbitrary requested row order, caption and HTML',async()=>{
+    const table=await tied();expect(validateTable(table,2).rows).toHaveLength(36);
+    const service=createStandingsService({id:'fictional',getCurrentTable:async()=>table});
+    const job=await service(2,[28,29,30,31]);expect(job.standings.rows.map(r=>r.position)).toEqual([28,29,29,31]);
+    expect(job.caption).toContain('display rows: 28, 29, 30, 31');
+    expect(job.caption).toContain('official ranks');
+    expect(buildStandingsHtml(job,Buffer.from('background')).match(/class="number">29</g)).toHaveLength(2);
+    const reversed=await service(2,[31,30,29]);expect(reversed.standings.rows.map(r=>r.displayRow)).toEqual([31,30,29]);
+    expect(validateTable(reversed.standings,2,Date.now(),true)).toBe(reversed.standings);
+    expect((await service(2,[30])).standings.rows[0].teamId).toBe('721');
+  });
+  it('keeps domestic official-position selection and duplicate-rank rejection unchanged',async()=>{
+    const table=await fictionalTable();const shuffled={...table,rows:[...table.rows].reverse()};expect(selectPositions(shuffled,[1,5,20]).map(r=>r.position)).toEqual([1,5,20]);
+    table.rows[1].position=1;expect(()=>validateTable(table,39)).toThrow();
+  });
+  it('rejects unknown tied identities, rank gaps, invalid display indices and incomplete tables',async()=>{
+    for(const mutation of [(t:Awaited<ReturnType<typeof tied>>)=>{t.rows[29].teamId='unknown';},(t:Awaited<ReturnType<typeof tied>>)=>{t.rows[30].position=30;},(t:Awaited<ReturnType<typeof tied>>)=>{t.rows[30].displayRow=30;},(t:Awaited<ReturnType<typeof tied>>)=>{t.rows.pop();}]){const table=await tied();mutation(table);expect(()=>validateTable(table,2)).toThrow();}
+  });
+  it('does not carry verified abbreviated-name evidence into a different season',async()=>{const table=await tied();const clock=Date.parse('2027-11-01');table.fetchedAt=clock;table.seasonStart='2027-09-01';table.seasonEnd='2028-01-30';expect(()=>validateTable(table,2,clock)).toThrow('ordering needs review');});
+  it('explains row selection in Telegram collection and authorized help',async()=>{
+    expect(standingsTransition({text:'UCL'},{background:'photo',ts:Date.now()},Date.now())).toMatchObject({reply:expect.stringContaining('display rows 1-36')});
+    const f=bot();await f.handle(f.update(1,{text:'/help'}));expect(f.tg.sendMessage).toHaveBeenCalledWith('42',expect.stringContaining('28, 29, 29, 31'));
+  });
+});

@@ -1,9 +1,9 @@
-﻿import { standingsTransition, createStandingsService, StandingsError } from '../../src/lib/news/standings.ts';
+﻿import { standingsTransition, createStandingsService, StandingsError, UCL_ROW_HELP } from '../../src/lib/news/standings.ts';
 import { createHash } from 'node:crypto';
 import { DEFAULT_NEWS_STYLE, HELP } from '../../src/lib/news/parse.ts';
 import { originalNewsTransition } from '../../src/lib/news/conversation.ts';
 
-export const NEWS_HELP = HELP;
+export const NEWS_HELP = HELP+'\n\nStandings: send a photo caption such as Premier League 15 16 17 18, or /standings to collect messages.\n'+UCL_ROW_HELP;
 export const builtinNewsTemplates = ['single','left','right','breaking'].map(id=>({id,layout:id,config:DEFAULT_NEWS_STYLE,name:({single:'Single',left:'Circle Left',right:'Circle Right',breaking:'BREAKING'})[id]}));
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const safeCodes=new Set(['NEWS_RENDER_AUTH','NEWS_RENDER_PROTOCOL','NEWS_RENDER_UNAVAILABLE','NEWS_RENDER_FAILED','NEWS_RENDER_OUTPUT']);
@@ -31,10 +31,11 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       const code=start?.[1];
       if(code&&/^[a-f0-9]{48}$/.test(code)){
         const linked=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:null,linkCodeHash:hash(code),linkExpiresAt:{gt:new Date(now())}},data:{telegramChatId:chatId,linkCodeHash:null,linkExpiresAt:null,pending:null}});
-        if(linked.count){await reply(HELP);return;}
+        if(linked.count){await reply(NEWS_HELP);return;}
       }
       await reply('This bot is private. Use the account linking button on your Final Whistle News dashboard.');return;
     }
+    if(/^\/(help|start)(?:@\w+)?$/i.test((msg.text??'').trim())){await reply(NEWS_HELP);return;}
     let phase='parse';
     let output;
     let delivered=false;

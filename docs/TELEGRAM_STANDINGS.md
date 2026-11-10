@@ -24,13 +24,41 @@ Returned overall tables have `stage: REGULAR_SEASON`, `type: TOTAL`, and `group:
 
 Further live checks through the actual provider/service loaded all five complete tables and normalized their real league/club raster assets. Every league successfully selected `[15,16,17,18]`. A PL check also preserved `[18,15,16,17]` in that order and selected a single position from cache. It sent nothing to Telegram, wrote no standings dataset to the repository and published nothing. This is live API/asset validation, not proof of real Telegram delivery or reuse licensing.
 
-## Champions League extension (2026-11-11)
+## Champions League official ties and display-row selection (2026-11-11)
 
-The registered Free account can authenticate to `CL/standings` and `CL/teams`: both returned **HTTP 200**, no API error, matching season ID, dates **2026-09-08 through 2027-01-27**, and **36 teams**. The standings response has competition type `CUP`, stage **`LEAGUE_STAGE`**, type **`TOTAL`**, and group **`League phase`**. This exact verified phase shape is supported separately from domestic `REGULAR_SEASON`/`Matchday` data.
+The registered Free account authenticates to `CL/standings` and `CL/teams`: both return HTTP 200, matching season dates **2026-09-08 through 2027-01-27**, and 36 unique teams. Supported overall table: competition type `CUP`, stage `LEAGUE_STAGE`, type `TOTAL`, group `League phase`. Group and knockout-stage substitutes remain rejected.
 
-**Current upstream data blocker:** the 36 returned rows contain duplicate rank **29** and no rank **30**. The API key has access, but this observed response is not a complete unambiguous positional table. The application rejects it as `STANDINGS_DATA`; it does not renumber teams, infer position 30, select only apparently unaffected rows, or substitute historical/group/knockout tables. A follow-up actual provider/service check confirmed rejection before any crest request or Telegram send. Ask football-data.org to clarify/correct the duplicated rank 29 and missing 30 in the current CL league-phase response. No key is needed in that support report. After the source returns one complete set of unique positions 1-36, normal generation can proceed without a bypass or separate enable switch.
+### Official rank is not a unique row index
 
-Supported captions include `Champions League 1 2 3`, `UCL 1 2 3 4`, `CL 9 10 11 12`, `Champions League 24 25 26`, and `Champions League 33 34 35 36`. Requested order is preserved. CL requires exactly 36 teams; domestic team-count bounds remain unchanged. Shared rate admission, current-season metadata matching, six-key table cache and existing UCL league-ID accents are reused. A 36-row fictional table passes the actual News Chromium/Sharp rendering pipeline. No live UCL graphic is claimed while the source is invalid.
+UEFA's actual live table and football-data.org both display **AEK Athens and Leipzig jointly at 29**, then Sabah at 31. This is a legitimate provisional tie, not a demonstrated provider defect. The prior documentation calling it an upstream data blocker was incorrect: our unique-rank assumption was too restrictive.
+
+UEFA explains that matchdays 1-7 apply the first five tiebreakers and retain equal rankings if those do not separate the teams, displaying the tied clubs alphabetically by UEFA abbreviated name. From matchday 8 the full criteria apply. Both clubs currently have 3 points, -6 GD, 5 goals, 2 away goals, 1 win and 0 away wins. Sources: [UEFA live standings and tiebreaker explanation](https://www.uefa.com/uefachampionsleague/standings/), [Article 18](https://documents.uefa.com/r/Regulations-of-the-UEFA-Champions-League-2026/27/Article-18-Equality-of-points-league-phase-Online).
+
+For **UCL only**, user numbers select **1-based display rows** in the verified provider sequence. Official rank labels are preserved verbatim:
+
+| Request | Selected teams | Displayed official ranks |
+| --- | --- | --- |
+| `UCL 28 29 30 31` | Villarreal, AEK Athens, Leipzig, Sabah | 28, 29, 29, 31 |
+| `UCL 31 30 29` | Sabah, Leipzig, AEK Athens | 31, 29, 29 |
+| `UCL 30` | Leipzig | 29 |
+
+No team becomes officially 30th. Domestic requests still select official positions exactly as before. Duplicate user selection numbers are deduplicated in requested order; duplicated official ranks are retained as distinct teams. `/help`, `/start`, UCL collection prompts and the resulting document caption explain the distinction. The image shows official ranks, not generated row labels.
+
+### Verified order and future limits
+
+A fresh read-only comparison of **all 36 displayed rows** on UEFA.com against the authenticated API found matching clubs, sequence and official ranks. Repeated checks of the affected rows also agreed. However, the reviewed football-data.org documentation does **not** provide a permanent contract for tied array order; a snapshot cannot establish that guarantee.
+
+The implementation therefore verifies order rather than silently trusting, sorting or renumbering it:
+
+- The full current-season table must contain exactly 36 valid rows and the same unique team IDs as current-season competition team metadata.
+- Official ranks must follow competition ranking in the supplied order: `28,29,29,31` is valid; shuffled rows, unexplained gaps and `28,29,29,30` are rejected.
+- Each mapped UCL row retains an explicit `displayRow`. Selection copies rows by that index and preserves each original `position`. Selected subsets may be reordered by the user.
+- Tied clubs must appear alphabetically by verified UEFA abbreviated names. `src/lib/news/ucl-order.ts` records the 36 current clubs' API-ID-to-UEFA-label associations verified from the live 2026/27 table. No synthetic names or inferred ranks are added to production.
+- Unknown tied identities, ambiguous alphabetical comparisons, reversed tie order or a new season without reviewed abbreviation evidence fail with `STANDINGS_ORDER` before artwork loading. Unique IDs and row-count checks remain mandatory. Domestic validation is unchanged.
+
+This is evidence-backed validation for the observed season and UEFA's published display convention, **not** a claim that the API promises forever to match UEFA or that every future name change is automatically verified. Review the label evidence for a new season, club branding change or reported ordering discrepancy. The safe alternative for an unverified tied order is to stop that generation and compare the official table/update the reviewed labels; never silently use array indices, sort provider rows, or invent a sporting rank.
+
+Actual live checks through the integrated provider/service passed for `[28,29,30,31]` (official labels `[28,29,29,31]`) and `[31,30,29]` (labels `[31,29,29]`), with real normalized crests. No real Telegram message or public graphic was sent. Tests use fictional data and include tied/skipped ranks and actual rendering of both a 36-row table and a tied-rank subset. Rate admission, caching, attribution, image/security safeguards, and existing UCL accents are preserved.
 
 ## Provider investigation (2026-11-11)
 
@@ -66,13 +94,14 @@ A two-line caption also works. Conversation alternatives:
 2. Send `/standings`; provide the league, positions and photo as prompted.
 3. Send `/standings La Liga 1 5 10 20`; then send the photo.
 
-Use `/cancel` to return to ordinary News. Recognized league names: Premier League/EPL, La Liga/LaLiga, Serie A, Bundesliga, Ligue 1, Champions League/UEFA Champions League/UCL/CL. Positions are unique positive integers in requested order and are checked against the complete actual table. Unsupported leagues or malformed positions receive a prompt; no guessing/fallback occurs. Collection expires after one hour. Existing ordinary News captions and commands remain intact outside standings mode.
+Use `/cancel` to return to ordinary News. Recognized league names: Premier League/EPL, La Liga/LaLiga, Serie A, Bundesliga, Ligue 1, Champions League/UEFA Champions League/UCL/CL. Selection numbers are unique positive integers in requested order and are checked against the complete actual table. Domestic numbers mean official positions; UCL numbers mean display rows 1-36, with official tied ranks retained. Unsupported leagues or malformed positions receive a prompt; no guessing/fallback occurs. Collection expires after one hour. Existing ordinary News captions and commands remain intact outside standings mode.
 
 If the key is missing, a complete request receives an explicit source-configuration message before downloading or rendering the photo. HTTP/authentication/rate-limit failures receive sanitized errors; no sample data is sent instead.
 
 ## Data and rendering architecture
 
-- `src/lib/news/standings.ts`: common table/provider contract, complete rank/team validation, season/date checks, position parsing, pure conversation transitions, maximum six cache keys, in-flight coalescing and 15-minute cache. No stale fallback. Selected results are copied so callers cannot mutate cached tables.
+- `src/lib/news/standings.ts`: common table/provider contract, competition-aware rank/team/order validation, season/date checks, selection parsing, pure conversation transitions, maximum six cache keys, in-flight coalescing and 15-minute cache. No stale fallback. Selected results are copied so callers cannot mutate cached tables.
+- `src/lib/news/ucl-order.ts`: reviewed UEFA abbreviated-name evidence and fail-closed UCL row-order validation; never sorts or renumbers rows.
 - `src/lib/news/standings-adapters.ts`: pure football-data.org DTO mapper; one unambiguous competition-appropriate overall TOTAL table only, expected complete team count from matching current-season teams metadata, and raster bytes.
 - `src/lib/news/football-data.ts`: fixed HTTPS API origin, auth header only to that origin, redirects rejected for API calls, 15-second API deadlines and 512 KiB streamed JSON limit. At most ten admissions per rolling minute, including failures; 429 Retry-After cooldown, no automatic retry/queue, at most two concurrent table loads. Both standings and current teams metadata must match before artwork loading. Crest URLs must originate on the provider crest host; the existing DNS/SSRF-safe downloader bounds bytes/time and checks redirects. Existing SVG/APNG validation runs before rasterization. Crests become bounded PNGs and a maximum 128-entry, one-hour cache is shared across all account handlers. A single News manager owns the key budget; do not share this key with independent workers without shared admission. External use can cause 429s and is not hidden.
 - `scripts/lib/news-core.mjs`: existing linked-chat ownership checks, durable update claim, state persistence, sending recheck and at-most-once document delivery wrap the new flow. Ambiguous delivery is not automatically retried. Provider errors are sanitized. The production News manager already processes each bot's updates sequentially under its existing database lock.
@@ -96,8 +125,8 @@ The preview generator runs a temporary local renderer on an ephemeral port with 
 
 ### Verified local results
 
-- Full JavaScript/TypeScript suite: **610 tests passed, 46 files**, with `npm.cmd exec vitest run -- --maxWorkers=2`. An unrestricted parallel run timed out in the existing Match layout test under concurrent browser/build load; no test timeout was increased or disabled. Reducing worker contention allowed the complete suite to pass.
-- Provider regressions include verified domestic Matchday and UCL League phase labels, all six codes, 18-team, 20-team and 36-team tables, rejected group/knockout stages, duplicate/missing ranks, single-row selection, shared cache/in-flight behavior, 10/minute admission, 429 cooldowns, authentication failures, malformed/oversized data, season and team-set mismatches, unsafe artwork and concurrency. Existing News/standings/real-renderer checks passed as part of the complete suite.
+- Full JavaScript/TypeScript suite: **618 tests passed, 46 files**, with `npm.cmd exec vitest run -- --maxWorkers=2`. An unrestricted parallel run timed out in the existing Match layout test under concurrent browser/build load; no test timeout was increased or disabled. Reducing worker contention allowed the complete suite to pass.
+- Provider regressions include verified domestic Matchday and UCL League phase labels, all six codes, 18-team, 20-team and 36-team tables, rejected group/knockout stages, official ties and valid skipped ranks, rejected inconsistent rank sequences, display-row selection and unknown/reversed tie-order guards, single-row selection, shared cache/in-flight behavior, 10/minute admission, 429 cooldowns, authentication failures, malformed/oversized data, season and team-set mismatches, unsafe artwork and concurrency. Existing News/standings/real-renderer checks passed as part of the complete suite.
 - `npm.cmd run typecheck`: passed for application and tests.
 - Production build: `npm.cmd run build -- --webpack` passed. Default local Turbopack could not resolve dependencies through this isolated worktree's external node_modules junction; no deployment/build configuration was changed to accommodate that local setup.
 - Generated and inspected actual 1080x1350 JPEG examples with 2/3/4 rows and a contact sheet. Real renderer tests additionally cover 1, 20 and 36 rows, 4:4:4 output, embedded ICC and unsafe SVG rejection.

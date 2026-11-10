@@ -1,5 +1,6 @@
 // Server-side only. No API-Football calls and no paid or historical fallback.
 import sharp from 'sharp';
+import { uclOrderProblem } from './ucl-order.ts';
 import { createRequire } from 'node:module';
 import { downloadPublicResource } from '../../../render/security.js';
 import { footballDataCodes, mapFootballData, isOverallStanding } from './standings-adapters.ts';
@@ -74,9 +75,13 @@ export function createFootballDataProvider({apiKey,fetchImpl=fetch,now=Date.now,
       const teams=await request<TeamsResponse>(code,'teams',deadline);
       const time=now(),start=Date.parse(data.season?.startDate),end=Date.parse(data.season?.endDate);
       if(!Number.isFinite(start)||!Number.isFinite(end)||start>time||end<time||end<=start||end-start>400*86400_000||!Number.isSafeInteger(data.season?.id)||teams?.competition?.code!==code||teams.season?.id!==data.season.id||teams.season.startDate!==data.season.startDate||teams.season.endDate!==data.season.endDate||!Array.isArray(teams.teams)||!validTeamCount(leagueId,teams.count)||teams.count!==teams.teams.length||rows.length!==teams.count)throw unavailable();
-      // Do not invent ordinal ranks for shared/duplicated provider positions.
-      const ranks=new Set(rows.map(r=>r.position));
-      if(ranks.size!==teams.count||rows.some(r=>!Number.isSafeInteger(r.position)||r.position<1||r.position>teams.count))throw new StandingsError('STANDINGS_DATA','The standings source returned duplicate or missing positions. Please try later; no ranks were renumbered.');
+      if(leagueId===2){
+        const problem=uclOrderProblem(rows.map((r,i)=>({position:r.position,teamId:String(r.team?.id),displayRow:i+1})),data.season.startDate);
+        if(problem)throw new StandingsError('STANDINGS_ORDER',problem+'. Please try later or ask the account owner to review the source.');
+      }else{
+        const ranks=new Set(rows.map(r=>r.position));
+        if(ranks.size!==teams.count||rows.some(r=>!Number.isSafeInteger(r.position)||r.position<1||r.position>teams.count))throw new StandingsError('STANDINGS_DATA','The standings source returned duplicate or missing positions. Please try later; no ranks were renumbered.');
+      }
       const teamIds=new Set(teams.teams.map(t=>t.id));
       if(teamIds.size!==teams.count||[...teamIds].some(id=>!Number.isSafeInteger(id)||id<1)||new Set(rows.map(r=>r.team?.id)).size!==teams.count||rows.some(r=>!teamIds.has(r.team?.id)))throw unavailable();
       const crests:Record<string,string>={};

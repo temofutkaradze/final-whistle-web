@@ -38,12 +38,29 @@ describe('Champions League overall league-phase provider',()=>{
     const all=await service(2,Array.from({length:36},(_,i)=>i+1));expect(all.standings.rows.map(r=>r.position)).toEqual(Array.from({length:36},(_,i)=>i+1));
     for(const positions of [[1,2,3],[9,10,11,12],[24,25,26],[36,33,35,34]])expect((await service(2,positions)).standings.rows.map(r=>r.position)).toEqual(positions);
     expect(f.fetchImpl).toHaveBeenCalledTimes(2);
-    for(const positions of [[37],[0],[-1],[1.5]])await expect(service(2,positions)).rejects.toThrow('Position');
+    for(const positions of [[37],[0],[-1],[1.5]])await expect(service(2,positions)).rejects.toThrow('row');
   });
-  it('blocks the observed 36-row response with duplicate 29 and missing 30, without downloading or renumbering',async()=>{
-    const f=await fixture(2);f.raw.standings[0].table[29].position=29;
-    await expect(f.provider().getCurrentTable(2)).rejects.toMatchObject({code:'STANDINGS_DATA'});
-    expect(f.raw.standings[0].table[29].position).toBe(29);expect(f.download).not.toHaveBeenCalled();
+  it('selects tied display rows without changing official rank labels',async()=>{
+    const f=await fixture(2);
+    f.raw.standings[0].table[28].team.id=1899;f.raw.standings[0].table[29].team.id=721;f.raw.standings[0].table[29].position=29;
+    f.teams.teams=f.raw.standings[0].table.map(r=>r.team);
+    const service=createStandingsService(f.provider());
+    const job=await service(2,[28,29,30,31]);
+    expect(job.standings.rows.map(r=>r.position)).toEqual([28,29,29,31]);
+    expect(job.standings.rows.map(r=>r.displayRow)).toEqual([28,29,30,31]);
+    expect((await service(2,[30,29,31])).standings.rows.map(r=>r.position)).toEqual([29,29,31]);
+    expect(f.raw.standings[0].table[29].position).toBe(29);expect(f.download).toHaveBeenCalled();
+  });
+  it('blocks reversed or unverified tied-row order before artwork loading',async()=>{
+    for(const ids of [[721,1899],[9991,9992]]){
+      const f=await fixture(2);f.raw.standings[0].table[28].team.id=ids[0];f.raw.standings[0].table[29].team.id=ids[1];f.raw.standings[0].table[29].position=29;f.teams.teams=f.raw.standings[0].table.map(r=>r.team);
+      await expect(f.provider().getCurrentTable(2)).rejects.toMatchObject({code:'STANDINGS_ORDER'});expect(f.download).not.toHaveBeenCalled();
+    }
+  });
+  it('rejects inconsistent skipped ranks, unsorted rows and repeated team IDs',async()=>{
+    for(const modify of [(f:Awaited<ReturnType<typeof fixture>>)=>{f.raw.standings[0].table[29].position=31;},(f:Awaited<ReturnType<typeof fixture>>)=>{[f.raw.standings[0].table[28],f.raw.standings[0].table[29]]=[f.raw.standings[0].table[29],f.raw.standings[0].table[28]];},(f:Awaited<ReturnType<typeof fixture>>)=>{f.raw.standings[0].table[29].team.id=f.raw.standings[0].table[28].team.id;}]){
+      const f=await fixture(2);modify(f);await expect(f.provider().getCurrentTable(2)).rejects.toThrow();expect(f.download).not.toHaveBeenCalled();
+    }
   });
   it('rejects truncated 35-team metadata even when its row count matches',async()=>{
     const f=await fixture(2);f.raw.standings[0].table.pop();f.teams.teams.pop();f.teams.count=35;
