@@ -471,11 +471,11 @@ this order into ONE policy:
 
 ```text
 zero compute-core quotas /standard-a1-*/ in tenancy
-set compute-core quota standard-a1-core-count to 2 in tenancy where request.region = 'eu-paris-1' and request.ad = 'hsNq:EU-PARIS-1-AD-1'
+set compute-core quota standard-a1-core-count to 2 in tenancy where request.ad = 'hsNq:EU-PARIS-1-AD-1'
 zero compute-memory quotas /standard-a1-*/ in tenancy
-set compute-memory quota standard-a1-memory-count to 12 in tenancy where request.region = 'eu-paris-1' and request.ad = 'hsNq:EU-PARIS-1-AD-1'
+set compute-memory quota standard-a1-memory-count to 12 in tenancy where request.ad = 'hsNq:EU-PARIS-1-AD-1'
 zero block-storage quota total-storage-gb in tenancy
-set block-storage quota total-storage-gb to 200 in tenancy where request.region = 'eu-paris-1' and request.ad = 'hsNq:EU-PARIS-1-AD-1'
+set block-storage quota total-storage-gb to 200 in tenancy where request.ad = 'hsNq:EU-PARIS-1-AD-1'
 ```
 
 Also grant the existing audit group **read-only quota inspection**, if absent:
@@ -560,3 +560,11 @@ reviewed verifier consumes it; do not replace it with an attestation checkbox.
 Current work preserves the cron and hard billing gate. External enforcement can
 become PASS from exact authoritative quota reads; monthly/billing remain BLOCKED
 where evidence is missing. No cloud or IAM policy has been applied by this PR.
+
+
+Quota syntax note: the prepared policy uses the documented **single request.ad**
+condition with the complete tenancy-specific Paris AD name, rather than assuming
+an undocumented boolean-AND quota grammar. The preceding global zero leaves no
+allowance in other ADs/regions; target preflight independently verifies that this
+exact AD belongs to the ready Paris home region. Console acceptance and effective
+quota reads remain mandatory before any enforcement claim for the real tenancy.

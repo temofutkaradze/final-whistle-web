@@ -12,7 +12,7 @@ def statements():
     # One policy: deny by default across regions/ADs, then permit only Paris AD1.
     # Shared A1 counters cover VM/BM/Container Instances; wildcard zero also
     # excludes A1 reservation quota names. Root caps include all descendants.
-    where = " where request.region = '" + REGION + "' and request.ad = '" + AD + "'"
+    where = " where request.ad = '" + AD + "'"
     return [
         "zero compute-core quotas /standard-a1-*/ in tenancy",
         "set compute-core quota standard-a1-core-count to 2 in tenancy" + where,

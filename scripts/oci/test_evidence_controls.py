@@ -58,7 +58,7 @@ class EvidenceTests(unittest.TestCase):
         base = c.statements()
         mutations = [base + ["unset compute-core quota standard-a1-core-count in tenancy"], list(reversed(base)),
                      [s.replace("to 2 ", "to 4 ") for s in base],
-                     [s.replace(c.REGION, "eu-frankfurt-1") for s in base],
+                     [s.replace("EU-PARIS-1", "EU-FRANKFURT-1") for s in base],
                      [s.replace(c.AD, "AD-OTHER") for s in base],
                      [s.replace("in tenancy", "in compartment final-whistle-servers") for s in base],
                      base[1:], [s.replace(" ", "\u2003") for s in base]]
