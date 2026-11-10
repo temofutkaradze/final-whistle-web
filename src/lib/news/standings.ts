@@ -4,7 +4,7 @@ export class StandingsError extends Error {
   code:string;
   constructor(code: string, message: string) { super(message); this.name='StandingsError'; this.code=code; }
 }
-export const DISABLED_MESSAGE='Current standings generation is not enabled: a free current-season source and its data/logo usage must be approved. Existing News posts still work.';
+export const DISABLED_MESSAGE='Current standings generation is not configured. Ask the account owner to set the server-side FOOTBALL_DATA_API_KEY. Existing News posts still work.';
 const aliases: Record<string,number>={'premier league':39,'epl':39,'la liga':140,'laliga':140,'serie a':135,'bundesliga':78,'ligue 1':61};
 export const standingsLeagues=LEAGUES.filter(l=>[39,140,135,78,61].includes(l.id));
 export function identifyLeague(value:string): number | undefined { return aliases[value.trim().toLowerCase().replace(/\s+/g,' ')]; }
@@ -23,7 +23,7 @@ export function validateTable(table:StandingsTable,leagueId:number,now=Date.now(
   if(!table||!standingsLeagues.some(l=>l.id===leagueId)||table.leagueId!==leagueId||typeof table.source!=='string'||!table.source.trim()||table.source.length>160||!Number.isFinite(table.fetchedAt)||table.fetchedAt>now+60_000||now-table.fetchedAt>60*60_000)fail();
   const start=Date.parse(table.seasonStart),end=Date.parse(table.seasonEnd);
   if(!Number.isFinite(start)||!Number.isFinite(end)||start>now||end<now||end<=start||end-start>400*86400_000)fail();
-  if(!Array.isArray(table.rows)||table.rows.length<2||table.rows.length>64||!Number.isSafeInteger(table.totalTeams)||table.totalTeams<2||table.totalTeams>24||table.rows.length>table.totalTeams||(!selected&&table.rows.length!==table.totalTeams)||!rasterBase64(table.leagueLogo))fail();
+  if(!Array.isArray(table.rows)||table.rows.length<(selected?1:2)||table.rows.length>64||!Number.isSafeInteger(table.totalTeams)||table.totalTeams<2||table.totalTeams>24||table.rows.length>table.totalTeams||(!selected&&table.rows.length!==table.totalTeams)||!rasterBase64(table.leagueLogo))fail();
   const ranks=new Set(),teams=new Set();
   for(const r of table.rows){
     if(!r||!Number.isSafeInteger(r.position)||r.position<1||r.position>table.totalTeams||ranks.has(r.position)||typeof r.teamId!=='string'||!r.teamId||teams.has(r.teamId)||typeof r.name!=='string'||!r.name.trim()||r.name.length>100||!Number.isSafeInteger(r.played)||r.played<0||r.played>100||!Number.isSafeInteger(r.goalDifference)||Math.abs(r.goalDifference)>1000||!Number.isSafeInteger(r.points)||Math.abs(r.points)>500||!rasterBase64(r.crest))fail();
@@ -51,7 +51,7 @@ export function createStandingsService(provider:StandingsProvider|null,now=Date.
     let table=cache.get(leagueId)?.table;
     if(!table||cache.get(leagueId)!.expires<=now()){
       let work=inflight.get(leagueId);
-      if(!work){work=Promise.resolve().then(()=>provider.getCurrentTable(leagueId)).then(t=>{validateTable(t,leagueId,now());const copy=structuredClone(t);cache.set(leagueId,{table:copy,expires:Math.min(now()+15*60_000,Date.parse(t.seasonEnd))});return copy;}).catch(()=>{throw new StandingsError('STANDINGS_UNAVAILABLE','The current standings source is unavailable. No historical or example data was substituted.');}).finally(()=>inflight.delete(leagueId));inflight.set(leagueId,work);}
+      if(!work){work=Promise.resolve().then(()=>provider.getCurrentTable(leagueId)).then(t=>{validateTable(t,leagueId,now());const copy=structuredClone(t);cache.set(leagueId,{table:copy,expires:Math.min(now()+15*60_000,Date.parse(t.seasonEnd))});return copy;}).catch(error=>{if(error instanceof StandingsError)throw error;throw new StandingsError('STANDINGS_UNAVAILABLE','The current standings source is unavailable. No historical or example data was substituted.');}).finally(()=>inflight.delete(leagueId));inflight.set(leagueId,work);}
       table=await work;
     }
     validateTable(table,leagueId,now());

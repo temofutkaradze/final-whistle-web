@@ -56,7 +56,7 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     const bottom=data.subarray((info.height-100)*info.width*info.channels);
     expect(bottom.some(value=>value>100)).toBe(true);
   },90_000);
-  for(const count of [2,3,4,20])it('renders fictional standings with '+count+' rows using the actual News pipeline',async()=>{
+  for(const count of [1,2,3,4,20])it('renders fictional standings with '+count+' rows using the actual News pipeline',async()=>{
     const job=await createStandingsService({id:'test-only',getCurrentTable:()=>fictionalTable()})(39,Array.from({length:count},(_,i)=>i+1));
     const response=await post({job,background:background.toString('base64'),circle:null});
     expect(response.status).toBe(200);const result=await response.json();outputs.add(result.jpg_path);

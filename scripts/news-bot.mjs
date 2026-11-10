@@ -4,6 +4,8 @@ import { prisma } from './lib/db.mjs';
 import { decryptSecret } from './lib/crypto.mjs';
 import { makeTelegram } from './lib/telegram.mjs';
 import { createNewsHandler } from './lib/news-core.mjs';
+import { createFootballDataProvider } from '../src/lib/news/football-data.ts';
+import { createStandingsService } from '../src/lib/news/standings.ts';
 import { acquireNewsManagerLock } from './lib/news-manager-lock.mjs';
 import { inspectNewsTelegram, telegramPollingCode } from './lib/news-preflight.mjs';
 import { readFile, unlink } from 'node:fs/promises';
@@ -17,6 +19,8 @@ import { renderNewsPost, verifyNewsRenderer } from '../src/lib/news/render.ts';
 const root=fileURLToPath(new URL('../',import.meta.url));
 process.chdir(root);
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+// One shared cache and rate budget for every account handled by this manager.
+const standings=createStandingsService(createFootballDataProvider({apiKey:process.env.FOOTBALL_DATA_API_KEY}));
 const running=new Map();
 const blockedUntil=new Map();
 let stopping=false;
@@ -27,7 +31,7 @@ for(const signal of ['SIGINT','SIGTERM'])process.on(signal,stop);
 function start(owner){
   const tg=makeTelegram(decryptSecret(owner.botToken));
   const ctx={stop:false,connectionToken:owner.botToken,task:null};
-  const handle=createNewsHandler({prisma,tg,ownerId:owner.userId,connectionToken:owner.botToken,
+  const handle=createNewsHandler({prisma,tg,standings,ownerId:owner.userId,connectionToken:owner.botToken,
     isActive:()=>!stopping&&!ctx.stop&&Boolean(managerLock?.active()),
     download:async id=>{
       const file=await tg.downloadTelegramFile(id,path.join(root,'storage','news-tmp'),`news-${randomUUID()}`);
