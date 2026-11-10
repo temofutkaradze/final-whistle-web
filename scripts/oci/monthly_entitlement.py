@@ -50,6 +50,17 @@ def assess(report):
             if not math.isfinite(used) or used + rate*future_hours > cap:
                 result["reason"] = "reported_plus_projected_calendar_month_usage_exceeds_conservative_cap"
                 return result
+        other_query = "USAGE_ONLY" if selected == "USAGE" else "USAGE"
+        if billing.get("api_access", {}).get(other_query) == "READ_SUCCEEDED":
+            other = [r for r in billing["rows"] if r.get("query") == other_query and r.get("sku") in METERS]
+            # Compare like-for-like intervals/units, never sum both query types.
+            # Distinct aggregation or delayed snapshots need review, not a guess.
+            def signature(values):
+                return sorted((r.get("sku"), r.get("unit"), r.get("time_started"),
+                               r.get("time_ended"), r.get("quantity")) for r in values)
+            if signature(rows) != signature(other):
+                result["reason"] = "conflicting_or_incomparable_usage_query_results"
+                return result
         # Positive rows and current quotas do not establish period reset, missing
         # historical resources or lag. Quota API has no modification history;
         # time_created cannot prove the present cap applied since month start.

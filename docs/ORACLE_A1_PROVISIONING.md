@@ -592,3 +592,98 @@ Provision job SKIPPED; activation_ready=false. No matching VM was found. Issue
 #11 remained ready, revision 0. No cloud/IAM resource, secret, billing setting or
 GitHub enable variable was modified. The policy statements above are manual
 administrator setup instructions, NOT changes already applied to the tenancy.
+
+
+## Active Free Trial clarification ? 2026-11-10
+
+**Owner-confirmed context:** this account currently has active Free Trial credits
+and has NOT been upgraded to Pay As You Go. It is NOT represented as an expired
+trial/Always Free-only account. This dated owner declaration is reported apart
+from API plan verification and never substitutes for launch authorization.
+The previous proposal to replace mandatory evidence gates was rejected by
+approval review and was not executed. This update does not retry that proposal:
+subscription, inventory, root-allocation, monthly and pricing guards remain in
+force, and conflicting cost/usage data gains explicit rejection coverage.
+
+### What official documentation establishes
+
+[Oracle's Free Tier description](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier.htm)
+includes both active credit-funded trials and Always Free offers. Active trial
+status does not make Always Free unavailable. Trial credits can also fund paid
+resources, and no credit-card charge without an account upgrade is NOT a promise
+that a deployment consumes no promotional credits.
+
+[Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+currently documents 1,500 A1 OCPU-hours / 9,000 memory GB-hours per month, equivalent
+to 2 OCPU / 12 GB for Free Tier, and 200 GB combined home-region boot/block storage.
+The exact requested target alone uses at most 1,488 OCPU-hours and 8,928 GB-hours
+in a 31-day month. These arithmetic bounds DO NOT establish remaining allowance
+if earlier or independently created resources consumed that month's entitlement.
+Remaining resources must still fit after Free Trial expires; the automation
+never upgrades the account and never switches to another shape.
+
+The [official Free Tier Linux tutorial](https://docs.oracle.com/en-us/iaas/Content/Compute/tutorials/first-linux-instance/overview.htm)
+uses default 50 GB Balanced storage. [Boot-volume documentation](https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/launchinginstance.htm)
+identifies Balanced as the default boot performance. This supports the requested
+published configuration. It is not a tenancy-specific assertion that no capacity
+or VPU SKU will consume credits. Generic performance pricing and free capacity
+allowances must not be confused with an observed charge or an exemption proved
+for this account. No logo/application/database/deployment settings are changed.
+
+### Reporting and regressions in this update
+
+- Separate dated owner-declared ACTIVE/EXPIRED trial context, API FREE_TIER/PAYG
+  evidence, and unverified API trial phase. FREE_TIER plus PROMO is accepted as
+  non-upgraded plan evidence, not falsely interpreted as trial expiry.
+- `published_configuration` describes support for the exact requested allocation
+  and is explicitly incapable of authorizing a launch or certifying unused
+  monthly entitlement. It requires the unchanged shared image/network preflight.
+- OSP denial is an access/service ambiguity, not proof of a paid account.
+- Empty usage stays unknown. Conflicting or differently aggregated USAGE and
+  USAGE_ONLY rows now remain explicitly unresolved; the implementation never
+  sums both query types or silently selects the lower observation as proof.
+- Positive COST evidence for an exported target SKU is an explicit review block,
+  not overridden by owner context. It does not by itself identify a card charge.
+- Existing tests retain exact allocation/payload, inventory, capacity retry,
+  one-launch, pending-token and durable success safeguards. New tests cover
+  active/expired trial context, paid/conflicting plans, absent evidence,
+  exceeded limits, conflicting usage/cost, and pending ambiguous outcomes.
+
+### Unresolved evidence and precise next actions
+
+1. **OSP plan API:** the latest diagnostic reported HTTP 404
+   `NotAuthorizedOrNotFound`; no plan was observed. In the Console select the
+   correct tenancy and Paris, then Identity & Security > Domains > Default >
+   Users > the API-key owner > API keys. Privately verify the key and owner,
+   then group membership in final-whistle-automation-group and the EXISTING
+   root subscription-read policy. Do not duplicate the already added grant.
+   If correct, Oracle must resolve API/service availability for this principal.
+   The expected-identity comparison in PR #27 can verify a privately supplied
+   expectation; no expected identity is guessed or exposed here.
+2. **Monthly credit-free allowance:** successful empty API results cannot prove
+   no prior/deleted-resource consumption or bound reporting lag. Billing & Cost
+   Management > Cost Analysis: tenancy-wide scope, no service/compartment filter,
+   same UTC period, grouped by SKU/unit. Obtain the applicable reset period,
+   actual A1 usage and an authoritative upper bound for missing usage. If Oracle
+   cannot supply these, this launch guarantee cannot be asserted by the current
+   verifier; do not turn missing observations into zeros.
+3. **50 GB / 10 VPU credit treatment:** obtain account-applicable entitlement or
+   Oracle clarification explicitly covering both boot capacity and Balanced
+   performance, remaining shared storage and post-trial continuation. This is
+   about avoiding promotional-credit consumption, not a claim that Balanced is
+   universally paid or unavailable to Free Trial users.
+4. **External allocations:** inventory is a snapshot, while active trials can
+   exceed the free allocation using credits. GitHub concurrency/Issue #11 only
+   serialize this automation. The reviewed root quota was not present in the
+   latest diagnostic; an equivalent enforced allocation envelope is essential
+   to this strict no-credit-consumption model if other principals may allocate.
+   Console: Governance & Administration > Limits, Quotas and Usage > Compartment
+   Quotas > tenancy ROOT. Review the six existing statements generated by
+   allocation_controls.statements() and obtain separate owner approval BEFORE
+   applying any policy. It affects all descendants/regions, not just this bot.
+   No policy is created or modified by these scripts. Current effective quotas
+   alone cannot prove historical enforcement or unused monthly entitlement.
+
+The enable variable remains false. A read-only audit may fail because of these
+material evidence gaps while all mocked tests pass. No real launch, activation,
+account upgrade, resource mutation or safety-issue write is part of this update.

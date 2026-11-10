@@ -106,6 +106,8 @@ def run(reader, env, issue_reader):
     except Exception:
         decision = {"launch_authorized": False, "blockers": ["safety_assessment_unavailable"]}
     report["launch_assessment"] = decision
+    report["account_context"] = decision.get("account_context", {})
+    report["published_configuration"] = decision.get("published_configuration", {})
     check("exact_launch_payload", checks["configuration"]["status"] == "PASS" and
           "launch_payload_not_exact_2_12_50_10" not in decision["blockers"] and
           "safety_assessment_unavailable" not in decision["blockers"],
@@ -150,6 +152,8 @@ def main():
         report = run(a.Reader(a.SDKBackend(env)), env, IssueReader(env))
         with args.output.open("x", encoding="utf-8") as out:
             out.write(json.dumps(report, indent=2, allow_nan=False) + "\n")
+        print("Account owner declaration (2026-11-10): ACTIVE Free Trial, not upgraded to PAYG; current API phase remains UNVERIFIED")
+        print("Published configuration support is separate from unused monthly entitlement; all launch guards remain enforced")
         lines = ["### Oracle A1 read-only activation audit", "| Requirement | Result |", "|---|---|"]
         for name, value in report["activation_checks"].items():
             print(name + ": " + value["status"] + " ? " + value["reason"])
