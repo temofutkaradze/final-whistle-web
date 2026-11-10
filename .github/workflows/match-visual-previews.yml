@@ -1,0 +1,48 @@
+name: Match visual review previews
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/match-visual-previews.yml'
+      - 'scripts/previews/**'
+      - 'tests/fixtures/match-reference-*'
+      - 'tests/fixtures/photos/**'
+      - 'render/render-server.js'
+      - 'render/templates/classic.html'
+      - 'render/league-accents.*'
+      - 'render/match-layout.*'
+      - 'scripts/lib/events.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: match-visual-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  previews:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Generate fictional previews through the actual local renderer
+        run: node scripts/previews/match-references.mjs --review-only --background tests/fixtures/photos/visual-review-cc0.jpg --logos --output-dir storage/match-visual-review-rendered
+      - name: Package full-resolution JPGs, labeled contact sheet and mock descriptions
+        run: node scripts/previews/package-match-review.mjs --source storage/match-visual-review-rendered --output storage/match-visual-review-bundle
+      - name: Upload downloadable review ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-whistle-match-visual-review
+          path: storage/match-visual-review-bundle.zip
+          if-no-files-found: error
+          retention-days: 14
