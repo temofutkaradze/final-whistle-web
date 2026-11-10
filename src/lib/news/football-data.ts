@@ -2,8 +2,8 @@
 import sharp from 'sharp';
 import { createRequire } from 'node:module';
 import { downloadPublicResource } from '../../../render/security.js';
-import { footballDataCodes, mapFootballData } from './standings-adapters.ts';
-import { StandingsError, type StandingsProvider } from './standings.ts';
+import { footballDataCodes, mapFootballData, isOverallStanding } from './standings-adapters.ts';
+import { StandingsError, validTeamCount, type StandingsProvider } from './standings.ts';
 const require=createRequire(import.meta.url);
 const {validateMatchImage}=require('../../../render/security.js') as {validateMatchImage:(b:Buffer)=>Promise<{format:string;width:number;height:number;pages:number}>};
 const ORIGIN='https://api.football-data.org';
@@ -68,12 +68,15 @@ export function createFootballDataProvider({apiKey,fetchImpl=fetch,now=Date.now,
     activeTables++;const deadline=now()+45_000;
     try{
       const data=await request<StandingResponse>(code,'standings',deadline);
-      const totals=Array.isArray(data?.standings)?data.standings.filter(t=>t.type==='TOTAL'&&t.stage==='REGULAR_SEASON'&&(t.group==null||t.group==='Matchday')):[];
+      const totals=Array.isArray(data?.standings)?data.standings.filter(t=>isOverallStanding(leagueId,t)):[];
       if(data?.competition?.code!==code||totals.length!==1||!Array.isArray(totals[0].table))throw unavailable();
       const rows=totals[0].table;
       const teams=await request<TeamsResponse>(code,'teams',deadline);
       const time=now(),start=Date.parse(data.season?.startDate),end=Date.parse(data.season?.endDate);
-      if(!Number.isFinite(start)||!Number.isFinite(end)||start>time||end<time||end<=start||end-start>400*86400_000||!Number.isSafeInteger(data.season?.id)||teams?.competition?.code!==code||teams.season?.id!==data.season.id||teams.season.startDate!==data.season.startDate||teams.season.endDate!==data.season.endDate||!Array.isArray(teams.teams)||!Number.isSafeInteger(teams.count)||teams.count<2||teams.count>24||teams.count!==teams.teams.length||rows.length!==teams.count)throw unavailable();
+      if(!Number.isFinite(start)||!Number.isFinite(end)||start>time||end<time||end<=start||end-start>400*86400_000||!Number.isSafeInteger(data.season?.id)||teams?.competition?.code!==code||teams.season?.id!==data.season.id||teams.season.startDate!==data.season.startDate||teams.season.endDate!==data.season.endDate||!Array.isArray(teams.teams)||!validTeamCount(leagueId,teams.count)||teams.count!==teams.teams.length||rows.length!==teams.count)throw unavailable();
+      // Do not invent ordinal ranks for shared/duplicated provider positions.
+      const ranks=new Set(rows.map(r=>r.position));
+      if(ranks.size!==teams.count||rows.some(r=>!Number.isSafeInteger(r.position)||r.position<1||r.position>teams.count))throw new StandingsError('STANDINGS_DATA','The standings source returned duplicate or missing positions. Please try later; no ranks were renumbered.');
       const teamIds=new Set(teams.teams.map(t=>t.id));
       if(teamIds.size!==teams.count||[...teamIds].some(id=>!Number.isSafeInteger(id)||id<1)||new Set(rows.map(r=>r.team?.id)).size!==teams.count||rows.some(r=>!teamIds.has(r.team?.id)))throw unavailable();
       const crests:Record<string,string>={};

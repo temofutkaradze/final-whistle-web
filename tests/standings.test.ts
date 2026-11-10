@@ -36,3 +36,22 @@ describe('authorized News bot standings integration',()=>{
   it('unauthorized sender cannot call provider, download or render',async()=>{const getCurrentTable=vi.fn(()=>fictionalTable());const f=bot(createStandingsService({id:'test',getCurrentTable}));await f.handle(f.update(1,{photo:[{file_id:'p'}],caption:'Premier League 1 2'},99));expect(getCurrentTable).not.toHaveBeenCalled();expect(f.download).not.toHaveBeenCalled();});
   it('never retries an ambiguous document send on a duplicate update',async()=>{const f=bot(createStandingsService({id:'test',getCurrentTable:()=>fictionalTable()}));f.tg.sendDocument.mockRejectedValueOnce(Error('timeout'));const u=f.update(1,{photo:[{file_id:'p'}],caption:'Premier League 1 2'});await f.handle(u);await f.handle(u);expect(f.tg.sendDocument).toHaveBeenCalledTimes(1);expect(f.settings.pending.stage).toBe('sending');});
 });
+
+describe('Champions League Telegram and domain validation',()=>{
+  for(const caption of ['Champions League 1 2 3','UCL 1 2 3 4','CL 9 10 11 12','Champions League 24 25 26','Champions League 33 34 35 36'])it('recognizes '+caption,()=>{
+    expect(standingsTransition({photo:[{file_id:'photo'}],caption},null,Date.now())).toMatchObject({background:'photo',request:{leagueId:2,positions:parsePositions(caption.replace(/^(Champions League|UCL|CL) /,''))}});
+  });
+  it('allows exactly 36 CL teams and keeps domestic size bounds unchanged',async()=>{
+    const cl=await fictionalTable(2);expect(validateTable(cl,2).rows).toHaveLength(36);
+    expect(()=>validateTable({...cl,rows:cl.rows.slice(0,35)},2)).toThrow();
+    expect(()=>validateTable({...cl,totalTeams:35,rows:cl.rows.slice(0,35)},2)).toThrow();
+    expect(()=>validateTable({...cl,leagueId:39},39)).toThrow();
+    const domestic=await fictionalTable();expect(validateTable(domestic,39).rows).toHaveLength(20);
+    expect(validateTable({...domestic,leagueId:78,totalTeams:18,rows:domestic.rows.slice(0,18)},78).rows).toHaveLength(18);
+  });
+  it('uses existing UCL accent colors and branding',async()=>{
+    const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable(2)})(2,[36,1]);
+    const html=buildStandingsHtml(job,Buffer.from('sample'));expect(html).toContain('#35efd1');expect(html).toContain('UEFA CHAMPIONS LEAGUE');
+    expect(job.standings.rows.map(r=>r.position)).toEqual([36,1]);
+  });
+});
