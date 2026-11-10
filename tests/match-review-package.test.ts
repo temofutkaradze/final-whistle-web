@@ -8,7 +8,17 @@ import {packageReview,reviewCases} from '../scripts/previews/package-match-revie
 const temporary:string[]=[];
 async function fixture(){const root=await mkdtemp(join(tmpdir(),'fw-review-package-'));temporary.push(root);return root;}
 afterEach(async()=>{for(const root of temporary.splice(0))await rm(root,{recursive:true,force:true});});
-describe('downloadable fictional Match review bundle',()=>{
+describe('private local fictional Match review bundle',()=>{
+ it('rejects CLI output outside the ignored private preview directory before writing',()=>{
+  for(const args of [
+   ['scripts/previews/package-match-review.mjs','--source','missing-source','--output','docs/previews/forbidden'],
+   ['scripts/previews/match-references.mjs','--review-only','--output-dir','docs/previews/forbidden'],
+  ]){
+   const result=spawnSync(process.execPath,args,{encoding:'utf8',timeout:30000});
+   expect(result.status).not.toBe(0);
+   expect(result.stderr).toContain('must use a subfolder of preview-images/');
+  }
+ });
  it('covers 17 event scenarios and eight distinct league/fallback samples',()=>{
   expect(reviewCases).toHaveLength(25);
   expect(new Set(reviewCases.map(c=>c.file)).size).toBe(25);

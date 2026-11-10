@@ -75,5 +75,7 @@ export async function packageReview(source, destination) {
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
  const args=process.argv.slice(2);
  if(args.length!==4||args[0]!=='--source'||args[2]!=='--output')throw Error('Use --source <rendered-preview-folder> --output <new-bundle-folder>');
+ const relative=path.relative(path.resolve('preview-images'),path.resolve(args[3]));
+ if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw Error('New bundles must use a subfolder of preview-images/');
  console.log(JSON.stringify(await packageReview(args[1],args[3])));
 }

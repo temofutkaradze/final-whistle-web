@@ -15,3 +15,8 @@ render/output/
 .env.*
 !.env.example
 *.tsbuildinfo
+
+# Private local Match visual reviews (never upload or commit)
+/preview-images/
+/docs/previews/
+/tests/fixtures/photos/visual-review-cc0.jpg

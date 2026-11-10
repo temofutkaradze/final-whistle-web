@@ -17,7 +17,8 @@ const reviewOnly=process.argv.includes('--review-only');
 const outputAt=process.argv.indexOf('--output-dir');
 const inspectAt=process.argv.indexOf('--inspect-existing');
 const inspect=inspectAt>=0;
-const root=process.cwd(),output=path.resolve(inspect?process.argv[inspectAt+1]:outputAt>=0?process.argv[outputAt+1]:'storage/match-reference-previews/run-'+Date.now());
+const root=process.cwd(),output=path.resolve(inspect?process.argv[inspectAt+1]:outputAt>=0?process.argv[outputAt+1]:'preview-images/run-'+Date.now());
+if(!inspect){const relative=path.relative(path.resolve(root,'preview-images'),output);if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw Error('New previews must use a subfolder of preview-images/');}
 if(outputAt>=0&&!inspect&&fs.existsSync(output))throw Error('Refusing to overwrite an existing preview folder');
 fs.mkdirSync(output,{recursive:true});
 const backgroundArg=process.argv.indexOf('--background');
