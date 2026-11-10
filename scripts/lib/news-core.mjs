@@ -1,15 +1,16 @@
-﻿import { createHash } from 'node:crypto';
+﻿import { standingsTransition, createStandingsService, StandingsError, UCL_ROW_HELP } from '../../src/lib/news/standings.ts';
+import { createHash } from 'node:crypto';
 import { DEFAULT_NEWS_STYLE, HELP } from '../../src/lib/news/parse.ts';
 import { originalNewsTransition } from '../../src/lib/news/conversation.ts';
 
-export const NEWS_HELP = HELP;
+export const NEWS_HELP = HELP+'\n\nStandings: send a photo caption such as Premier League 15 16 17 18, or /standings to collect messages.\n'+UCL_ROW_HELP;
 export const builtinNewsTemplates = ['single','left','right','breaking'].map(id=>({id,layout:id,config:DEFAULT_NEWS_STYLE,name:({single:'Single',left:'Circle Left',right:'Circle Right',breaking:'BREAKING'})[id]}));
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const safeCodes=new Set(['NEWS_RENDER_AUTH','NEWS_RENDER_PROTOCOL','NEWS_RENDER_UNAVAILABLE','NEWS_RENDER_FAILED','NEWS_RENDER_OUTPUT']);
 
 // Security/linking and durable deduplication wrap the original conversation.
-// No automatic retry, progress reply, success reply, or invented Telegram commands.
-export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,render,cleanup,now=Date.now,isActive=()=>true,onDiagnostic=event=>console.error(`[News] ${event.code}; phase=${event.phase}; update=${event.updateId}`)}){
+// Standings is opt-in; original News behavior and at-most-once delivery remain unchanged.
+export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,render,cleanup,standings=createStandingsService(null),now=Date.now,isActive=()=>true,onDiagnostic=event=>console.error(`[News] ${event.code}; phase=${event.phase}; update=${event.updateId}`)}){
   const table=prisma.newsSettings;
   return async function processUpdate(update){
     if(!Number.isSafeInteger(update.update_id)||!isActive())return;
@@ -30,10 +31,11 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       const code=start?.[1];
       if(code&&/^[a-f0-9]{48}$/.test(code)){
         const linked=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:null,linkCodeHash:hash(code),linkExpiresAt:{gt:new Date(now())}},data:{telegramChatId:chatId,linkCodeHash:null,linkExpiresAt:null,pending:null}});
-        if(linked.count){await reply(HELP);return;}
+        if(linked.count){await reply(NEWS_HELP);return;}
       }
       await reply('This bot is private. Use the account linking button on your Final Whistle News dashboard.');return;
     }
+    if(/^\/(help|start)(?:@\w+)?$/i.test((msg.text??'').trim())){await reply(NEWS_HELP);return;}
     let phase='parse';
     let output;
     let delivered=false;
@@ -46,7 +48,21 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
         const template=await prisma.newsTemplate.findFirst({where:{id:settings.defaultTemplateRef,userId:ownerId},select:{config:true}});
         config=template?.config;
       }
-      const transition=originalNewsTransition(msg,pending,now(),config);
+      let transition=standingsTransition(msg,raw,now())??originalNewsTransition(msg,pending,now(),config);
+      if('request' in transition){
+        // Resolve before downloading; disabled sources never process the user's photo.
+        try{transition={pending:null,background:transition.background,circle:null,job:await standings(transition.request.leagueId,transition.request.positions)};}
+        catch(error){
+          if(error instanceof StandingsError){
+            // Retain this request's latest photo, never an older collection. Do not
+            // overwrite a newer update or a revoked connection while the API awaited.
+            const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:transition.collection}});
+            if(saved.count&&isActive())await reply(error.message);
+            return;
+          }
+          throw error;
+        }
+      }
       const state='job' in transition?{stage:'rendering',requestId:update.update_id}:transition.pending??{};
       const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:state}});
       if(!saved.count||!isActive())return;

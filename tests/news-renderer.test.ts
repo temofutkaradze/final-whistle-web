@@ -4,6 +4,8 @@ import { readFile, unlink } from 'node:fs/promises';
 import { dirname, basename, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
+import {fictionalTable} from './standings-fixture';
+import {createStandingsService} from '../src/lib/news/standings';
 import { buildJob } from '@/lib/news/parse';
 import { newsPreviewImages } from '@/lib/news/preview';
 
@@ -54,6 +56,25 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     const bottom=data.subarray((info.height-100)*info.width*info.channels);
     expect(bottom.some(value=>value>100)).toBe(true);
   },90_000);
+  for(const count of [1,2,3,4,20,36])it('renders fictional standings with '+count+' rows using the actual News pipeline',async()=>{
+    const job=await createStandingsService({id:'test-only',getCurrentTable:()=>fictionalTable(count===36?2:39)})(count===36?2:39,Array.from({length:count},(_,i)=>i+1));
+    const response=await post({job,background:background.toString('base64'),circle:null});
+    expect(response.status).toBe(200);const result=await response.json();outputs.add(result.jpg_path);
+    const bytes=await readFile(result.jpg_path);const meta=await sharp(bytes).metadata();
+    expect(meta).toMatchObject({width:1080,height:1350,format:'jpeg',chromaSubsampling:'4:4:4'});expect(meta.icc?.length).toBeGreaterThan(0);
+  },90_000);
+  it('renders UCL display rows 28-31 with official ranks 28,29,29,31',async()=>{
+    const table=await fictionalTable(2);table.rows[28].teamId='1899';table.rows[29].teamId='721';table.rows[29].position=29;
+    const job=await createStandingsService({id:'fictional-only',getCurrentTable:async()=>table})(2,[28,29,30,31]);
+    expect(job.standings.rows.map(r=>r.position)).toEqual([28,29,29,31]);
+    const response=await post({job,background:background.toString('base64'),circle:null});expect(response.status).toBe(200);
+    const result=await response.json();outputs.add(result.jpg_path);expect(await sharp(await readFile(result.jpg_path)).metadata()).toMatchObject({width:1080,height:1350,format:'jpeg'});
+  },90_000);
+  it('rejects unsafe/non-raster standings crests before Chromium',async()=>{
+    const job=await createStandingsService({id:'test',getCurrentTable:()=>fictionalTable()})(39,[1,2]);
+    job.standings.rows[0].crest=Buffer.from('<svg onload="alert(1)"></svg>').toString('base64');
+    expect((await post({job,background:background.toString('base64'),circle:null})).status).toBe(500);
+  });
   it('rejects a circle layout without its secondary image',async()=>{
     const response=await post({job:buildJob('Author | News',true,'left'),background:background.toString('base64'),circle:null});expect(response.status).toBe(500);
   });

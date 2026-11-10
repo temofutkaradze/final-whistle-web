@@ -12,7 +12,7 @@ module.exports = function createNewsRenderer({
   outputDir,
 }) {
   return async function renderNews(job, background, circle) {
-    const validLayouts = ["single", "left", "right", "breaking"];
+    const validLayouts = ["single", "left", "right", "breaking", "standings"];
 
     if (!job || !validLayouts.includes(job.layout)) {
       throw new Error("Invalid News layout");
@@ -52,7 +52,22 @@ module.exports = function createNewsRenderer({
     // Normalize orientation (phone EXIF) before Chromium sees the bytes.
     const bg = await sharp(background).rotate().png().toBuffer();
     const secondary = circle ? await sharp(circle).rotate().png().toBuffer() : null;
-    const html = buildHtml(job, bg, secondary);
+    let html;
+    if(job.layout==='standings'){
+      const {validateTable}=await import('../src/lib/news/standings.ts');
+      validateTable(job.standings,job.standings?.leagueId,Date.now(),true);
+      const normalized=[];
+      for(const value of [job.standings.leagueLogo,...job.standings.rows.map(r=>r.crest)]){
+        const bytes=Buffer.from(value,'base64');
+        await validateImage(bytes,'standings crest');
+        const meta=await sharp(bytes,{limitInputPixels:25_000_000}).metadata();
+        if((meta.pages??1)>1||meta.width>1024||meta.height>1024)throw new Error('Invalid standings crest dimensions or animation');
+        normalized.push((await sharp(bytes,{limitInputPixels:1024*1024}).rotate().png().toBuffer()).toString('base64'));
+      }
+      job={...job,standings:{...job.standings,leagueLogo:normalized[0],rows:job.standings.rows.map((r,i)=>({...r,crest:normalized[i+1]}))}};
+      const {buildStandingsHtml}=await import('../src/lib/news/standings-html.ts');
+      html=buildStandingsHtml(job,bg);
+    }else html=buildHtml(job, bg, secondary);
 
     // Separate browser context: Match rendering remains isolated.
     const browser = await getBrowser();

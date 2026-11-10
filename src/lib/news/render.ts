@@ -1,4 +1,5 @@
 ﻿
+import type { StandingsJob } from "./standings.ts";
 import type { Job } from "./parse.ts";
 import path from 'node:path';
 
@@ -30,7 +31,7 @@ export async function verifyNewsRenderer():Promise<void>{
 }
 
 export async function renderNewsPost(
-  job: Job,
+  job: Job | StandingsJob,
   background: Buffer,
   circle: Buffer | null
 ): Promise<string> {

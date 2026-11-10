@@ -436,7 +436,7 @@ async function handleNewsRequest(req, res) {
       !job ||
       typeof job !== "object" ||
       Array.isArray(job) ||
-      !["single", "left", "right", "breaking"].includes(job.layout) ||
+      !["single", "left", "right", "breaking", "standings"].includes(job.layout) ||
       typeof job.quote !== "string" ||
       typeof job.author !== "string" ||
       typeof job.caption !== "string" ||
