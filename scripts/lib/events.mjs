@@ -13,8 +13,9 @@ const DEFAULT_OWN_GOAL_TEAM_IS_SCORER_TEAM = true;
 // ავტოგოლის აიქონის ფერი
 const OG_COLOR = '#ee5a5a';
 
-export function buildEventsHtml(rawEvents, match) {
-const events = (Array.isArray(rawEvents) ? rawEvents : []).filter(ev => ev && typeof ev === 'object');
+export function buildEventsHtml(rawEvents, match = {}) {
+match = match && typeof match === 'object' ? match : {};
+let events = (Array.isArray(rawEvents) ? rawEvents : []).filter(ev => ev && typeof ev === 'object');
 
 function norm(s) {
     return String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -116,15 +117,15 @@ function isRedCardEvent(ev) {
 
 const yellowMoments = new Set(
     events
-        .filter(isYellowCard)
-        .filter(ev => elapsedOf(ev) !== null)
-        .map(ev => `${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`)
+        .filter(ev => isYellowCard(ev) || (isRedCardEvent(ev) && SECOND_YELLOW_RE.test(norm(ev.detail))))
+        .filter(ev => elapsedOf(ev) !== null && playerKey(ev) !== 'name:')
+        .map(ev => `${ev.team?.id ?? norm(ev.team?.name)}|${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`)
 );
 
 function isSecondYellow(ev) {
     if (SECOND_YELLOW_RE.test(norm(ev.detail))) return true;
     if (elapsedOf(ev) === null) return false;
-    return yellowMoments.has(`${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`);
+    return yellowMoments.has(`${ev.team?.id ?? norm(ev.team?.name)}|${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`);
 }
 
 // ---------------------------------------------------------------------
@@ -152,6 +153,11 @@ const awayName = norm(match.away_team);
 
 // აბრუნებს 'home' / 'away' / null (თუ ვერ ვადგენთ)
 function sideOf(ev) {
+    if (Number.isInteger(ev.team?.id) && Number.isInteger(match.home_team_id) && Number.isInteger(match.away_team_id)) {
+        if (ev.team.id === match.home_team_id) return 'home';
+        if (ev.team.id === match.away_team_id) return 'away';
+        return null;
+    }
     const t = norm(ev.team?.name);
     if (!t) return null;
     if (t === homeName) return 'home';
@@ -164,6 +170,40 @@ function sideOf(ev) {
 // ---------------------------------------------------------------------
 
 // დარტყმული პენალტი: თეთრი კარი + ბურთი
+// Collapse exact repeated provider records before own-goal score reconciliation.
+// Goals are only collapsed when the complete deduplicated goal distribution agrees
+// with the official score: two legitimate goals in one minute must not vanish.
+const recordKey = ev => JSON.stringify([ev.id ?? null, ev.team?.id ?? norm(ev.team?.name), playerKey(ev),
+    ev.assist?.id ?? ev.assist?.name ?? null, norm(ev.type), norm(ev.detail),
+    elapsedOf(ev), extraOf(ev), ev.comments ?? null]);
+const unique = [], seen = new Set();
+for (const ev of events) {
+    const key = recordKey(ev);
+    if (playerKey(ev) === 'name:' || !seen.has(key)) unique.push(ev);
+    seen.add(key);
+}
+const scoreKnown = [match.home_score, match.away_score].every(n => Number.isInteger(n) && n >= 0);
+const goalCount = list => list.filter(isCountedGoal).length;
+function goalsFitScore(list) {
+    const normal = { home: 0, away: 0 }, own = { home: 0, away: 0 };
+    for (const ev of list.filter(isCountedGoal)) {
+        const side = sideOf(ev);
+        if (!side || elapsedOf(ev) === null) return false;
+        (isOwnGoal(ev) ? own : normal)[side]++;
+    }
+    return (normal.home + own.home === match.home_score && normal.away + own.away === match.away_score)
+        || (normal.home + own.away === match.home_score && normal.away + own.home === match.away_score);
+}
+const goalDuplicatesConfirmed = scoreKnown && goalCount(events) > goalCount(unique) && goalsFitScore(unique);
+const accepted = new Set();
+events = events.filter(ev => {
+    if (playerKey(ev) === 'name:' || (isCountedGoal(ev) && !goalDuplicatesConfirmed)) return true;
+    const key = recordKey(ev);
+    if (accepted.has(key)) return false;
+    accepted.add(key);
+    return true;
+});
+
 const ICON_PENALTY_SCORED = `<span class="pk-wrap"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 4H20M4 4V15M20 4V15" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="17.5" r="3.4" fill="#ffffff"/><path d="M12 15.3 L13.5 16.4 L13 18.1 L11 18.1 L10.5 16.4 Z" fill="#1a1a1a"/></svg></span>`;
 
 // აცდენილი პენალტი: წითელი კარი + წითელი X
@@ -231,6 +271,7 @@ else flipOwnGoals = DEFAULT_OWN_GOAL_TEAM_IS_SCORER_TEAM;
 // ---------------------------------------------------------------------
 
 const relevant = [];
+const seenDismissals = new Set();
 for (const ev of events) {
     const category = categoryFor(ev);
     if (!category) continue;
@@ -249,6 +290,11 @@ for (const ev of events) {
     // ავტოგოლი გამოჩნდება იმ გუნდის გრაფაში, ვისაც გოლი ჩაეწერა
     if (category === 'goal-own' && flipOwnGoals) side = side === 'home' ? 'away' : 'home';
 
+    if (category.startsWith('card-') && playerKey(ev) !== 'name:') {
+        const key = `${side}|${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`;
+        if (seenDismissals.has(key)) continue;
+        seenDismissals.add(key);
+    }
     relevant.push({ ev, category, side });
 }
 
