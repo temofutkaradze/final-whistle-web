@@ -268,6 +268,66 @@ class AuditTests(unittest.TestCase):
             self.assertEqual(backend("instances", a.REGION, {"compartment_id": ROOT}).data, [])
         self.assertEqual(created, [{"timeout": (10, 60), "retry_strategy": "NONE"}])
 
+
+    def test_subscription_failure_is_api_failure_not_account_plan(self):
+        for status in (401, 403, 404, 500):
+            self.fake.override["subscriptions"] = a.AuditError("NotAuthorizedOrNotFound",
+                http_status=status, service="subscription", method="list_subscriptions")
+            report = self.run_audit()
+            self.assertEqual(report["subscription_diagnostics"]["read_status"], "LIST_FAILED_PLAN_NOT_OBSERVED")
+            self.assertEqual(report["subscription"]["plan_type"], "UNVERIFIED")
+            self.assertFalse(report["subscription"]["verified"])
+            error = next(e for e in report["errors"] if e["operation"] == "subscriptions")
+            self.assertEqual(error["diagnostic"]["http_status"], status)
+            self.assertNotIn("ocid1", json.dumps(error))
+
+    def test_subscription_request_uses_documented_osp_arguments_and_no_plan_fallback(self):
+        report = self.run_audit()
+        args = next(args for op, _, args in self.fake.calls if op == "subscriptions")
+        self.assertEqual(args, {"osp_home_region": a.REGION, "compartment_id": ROOT})
+        self.assertTrue(report["subscription"]["verified"])
+        self.fake.override["subscription"] = a.Page({"id": "subscription-test", "plan_type": "PAY_AS_YOU_GO"})
+        self.assertFalse(self.run_audit()["subscription"]["verified"])
+        self.fake.override["subscription"] = a.Page({"id": "subscription-test", "status": "ACTIVE"})
+        self.assertFalse(self.run_audit()["subscription"]["verified"])
+
+    def test_quota_name_absence_ambiguity_and_denial_are_distinct(self):
+        for rows, category, count in (([], "required_root_quota_name_missing", 0),
+                ([{"name": "final-whistle-free-tier-envelope"}]*2, "required_root_quota_name_ambiguous", 2)):
+            self.fake.override["quotas"] = a.Page(rows)
+            report = self.run_audit()
+            self.assertEqual(report["allocation_control"]["quota_read_status"], "LIST_SUCCEEDED")
+            self.assertEqual(report["allocation_control"]["expected_name_match_count"], count)
+            self.assertTrue(any(e["category"] == category for e in report["errors"]))
+        self.fake.override["quotas"] = a.AuditError("NotAuthorizedOrNotFound")
+        report = self.run_audit()
+        self.assertNotIn("quota_read_status", report["allocation_control"])
+        self.assertTrue(any(e["operation"] == "quotas" and e["category"] == "NotAuthorizedOrNotFound" for e in report["errors"]))
+
+    def test_empty_billing_success_exports_count_without_zero_entitlement(self):
+        self.fake.override["usage"] = a.Page({"items": []})
+        report = self.run_audit()
+        self.assertEqual(report["billing"]["response_row_counts"], {"USAGE": 0, "USAGE_ONLY": 0, "COST": 0})
+        self.assertEqual(report["billing"]["remaining_free_allowance"], "UNVERIFIED")
+
+    def test_sdk_service_failure_diagnostics_never_export_provider_message_or_request(self):
+        class ServiceError(Exception):
+            code = "NotAuthorizedOrNotFound"
+            status = 404
+        class Client:
+            def list_subscriptions(self, **kwargs):
+                raise ServiceError("PRIVATE-KEY ocid1.tenancy.SENSITIVE https://private.example/?token=SECRET")
+        backend = object.__new__(a.SDKBackend)
+        backend.clients = {("subscription", a.REGION): Client()}
+        backend.oci = types.SimpleNamespace(exceptions=types.SimpleNamespace(ServiceError=ServiceError))
+        with self.assertRaises(a.AuditError) as raised:
+            backend("subscriptions", a.REGION, {"compartment_id": ROOT, "osp_home_region": a.REGION})
+        error = raised.exception
+        self.assertEqual(error.diagnostic, {"http_status": 404, "service": "subscription", "method": "list_subscriptions"})
+        for private in ("PRIVATE", "ocid1", "https:", "SECRET"):
+            self.assertNotIn(private, str(error) + json.dumps(error.diagnostic))
+        self.assertFalse(a.AuditError("test", http_status=True, service="secret", method="secret").diagnostic)
+
     def test_main_requires_explicit_execution_and_never_overwrites_report(self):
         with patch.object(sys, "argv", ["audit_a1.py"]), patch("sys.stderr", new=io.StringIO()):
             self.assertEqual(a.main(), 2)

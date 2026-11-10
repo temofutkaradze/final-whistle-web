@@ -45,6 +45,14 @@ OPERATIONS = {
 
 class AuditError(RuntimeError):
     """Static/sanitized categories only: never provider bodies or credentials."""
+    def __init__(self, category, *, http_status=None, service=None, method=None):
+        super().__init__(category)
+        self.diagnostic = {}
+        if type(http_status) is int and 100 <= http_status <= 599:
+            self.diagnostic["http_status"] = http_status
+        # Only values from our fixed allowlist, never exception URLs or bodies.
+        if (service, method) in {(v[0], v[1]) for v in OPERATIONS.values()}:
+            self.diagnostic.update(service=service, method=method)
 
 
 def ref(value):
@@ -153,9 +161,10 @@ class SDKBackend:
             raise
         except self.oci.exceptions.ServiceError as error:
             code = error.code if isinstance(error.code, str) and re.fullmatch(r"[A-Za-z0-9_]{1,64}", error.code) else "ServiceError"
-            raise AuditError(code) from None
+            raise AuditError(code, http_status=getattr(error, "status", None),
+                             service=family, method=method) from None
         except Exception:
-            raise AuditError("sdk_read_failed") from None
+            raise AuditError("sdk_read_failed", service=family, method=method) from None
 
 
 class Audit:
@@ -174,11 +183,13 @@ class Audit:
             "risks": ["inventory_is_not_an_atomic_snapshot", "zero_or_absent_cost_is_not_free_entitlement",
                 "resource_metadata_does_not_prove_future_billing", "rate_card_is_not_remaining_allowance"]}
 
-    def error(self, operation, scope, category, query=None):
+    def error(self, operation, scope, category, query=None, diagnostic=None):
         if len(self.report["errors"]) < 500:
             entry = {"operation": operation, "scope_ref": ref(scope), "category": category}
             if query in ("USAGE", "USAGE_ONLY", "COST"):
                 entry["query"] = query
+            if diagnostic:
+                entry["diagnostic"] = diagnostic
             self.report["errors"].append(entry)
 
     def read(self, operation, region=REGION, **args):
@@ -186,7 +197,7 @@ class Audit:
             return self.reader.read(operation, region, **args)
         except AuditError as error:
             query = args.get("request_summarized_usages_details", {}).get("query_type")
-            self.error(operation, [region, args.get("compartment_id")], str(error), query)
+            self.error(operation, [region, args.get("compartment_id")], str(error), query, error.diagnostic)
             return None
 
     def unique(self, rows, key, operation):
@@ -204,9 +215,14 @@ class Audit:
         # Subscription data includes payment/address PII. Export only enums, never
         # the source objects or subscription identifiers into reports or logs.
         self.report["subscription"] = {"plan_type": "UNVERIFIED", "verified": False}
+        self.report["subscription_diagnostics"] = {"api": "osp_gateway.SubscriptionServiceClient", "api_version": "20191001",
+            "request_region": REGION, "osp_home_region": REGION, "scope": "tenancy_root",
+            "read_status": "UNVERIFIED", "account_status_inference": "NONE"}
         rows = self.read("subscriptions", osp_home_region=REGION, compartment_id=self.tenancy)
         if rows is None:
+            self.report["subscription_diagnostics"]["read_status"] = "LIST_FAILED_PLAN_NOT_OBSERVED"
             return
+        self.report["subscription_diagnostics"]["read_status"] = "LIST_SUCCEEDED"
         if len(rows) != 1 or not isinstance(rows[0].get("id"), str) or not rows[0]["id"]:
             self.error("subscriptions", "subscription", "missing_or_ambiguous_subscription")
             return
@@ -214,7 +230,9 @@ class Audit:
         detail = self.read("subscription", subscription_id=summary["id"],
                            osp_home_region=REGION, compartment_id=self.tenancy)
         if detail is None:
+            self.report["subscription_diagnostics"]["read_status"] = "DETAIL_FAILED_PLAN_NOT_VERIFIED"
             return
+        self.report["subscription_diagnostics"]["read_status"] = "LIST_AND_DETAIL_SUCCEEDED"
         if (detail.get("id") != summary["id"] or summary.get("plan_type") != "FREE_TIER"
                 or detail.get("plan_type") != "FREE_TIER"
                 or detail.get("time_plan_upgrade") is not None
@@ -223,7 +241,7 @@ class Audit:
                 or summary.get("upgrade_state") not in (None, "PROMO")):
             self.error("subscription", "subscription", "non_free_or_conflicting_subscription")
             return
-        self.report["subscription"] = {"plan_type": "FREE_TIER", "verified": True}
+        self.report["subscription"].update(plan_type="FREE_TIER", verified=True)
 
     def inventory(self):
         compartments = self.read("compartments", compartment_id=self.tenancy,
@@ -366,8 +384,11 @@ class Audit:
             self.error("quotas", "root", "quota_review_budget_exhausted")
             return
         matches = [q for q in rows if q.get("name") == controls.NAME]
+        self.report["allocation_control"]["quota_read_status"] = "LIST_SUCCEEDED"
+        self.report["allocation_control"]["expected_name_match_count"] = len(matches)
         if len(matches) != 1:
-            self.error("quotas", "root", "required_unique_root_quota_missing")
+            self.error("quotas", "root", "required_root_quota_name_missing" if not matches
+                       else "required_root_quota_name_ambiguous")
             return
         item = matches[0]
         if not isinstance(item.get("id"), str) or not item["id"].startswith("ocid1.quota."):
@@ -384,7 +405,7 @@ class Audit:
         end = self.now.replace(hour=0, minute=0, second=0, microsecond=0)
         self.report["billing"] = {"query_start": start.isoformat(), "query_end": end.isoformat(),
             "window": "calendar_month_to_last_utc_midnight_NOT_verified_subscription_period",
-            "reports_are_delayed": True, "remaining_free_allowance": "UNVERIFIED", "api_access": {}, "rows": []}
+            "reports_are_delayed": True, "remaining_free_allowance": "UNVERIFIED", "api_access": {}, "response_row_counts": {}, "rows": []}
         if start >= end:
             self.error("usage", "billing", "no_completed_daily_interval")
             return
@@ -395,6 +416,7 @@ class Audit:
             self.report["billing"]["api_access"][query] = "READ_SUCCEEDED" if rows is not None else "READ_FAILED"
             if rows is None:
                 continue
+            self.report["billing"]["response_row_counts"][query] = len(rows)
             if not rows:
                 self.error("usage", query, "no_billing_rows_NOT_zero_usage", query=query)
             matched = False

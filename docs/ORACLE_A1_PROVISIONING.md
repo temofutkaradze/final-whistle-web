@@ -592,3 +592,122 @@ Provision job SKIPPED; activation_ready=false. No matching VM was found. Issue
 #11 remained ready, revision 0. No cloud/IAM resource, secret, billing setting or
 GitHub enable variable was modified. The policy statements above are manual
 administrator setup instructions, NOT changes already applied to the tenancy.
+
+
+### Attached audit follow-up (2026-11-10; supersedes the older permission finding)
+
+Primary evidence: the user-supplied read-only audit generated at
+2026-11-10T01:11:42Z. No original identifiers or raw provider responses are
+included here. Subscription is BLOCKED; all three billing reads succeeded with
+zero returned rows; quota LIST succeeded but found no unique expected-name root
+policy; all effective quota values were absent. Provisioning remains disabled.
+The earlier live-run paragraph describes an OLDER quota authorization failure.
+It is not evidence that the currently installed read-quota permission is missing.
+
+#### 1. Subscription: API failure, not a Free Trial determination
+
+The pinned SDK invokes `osp_gateway.SubscriptionServiceClient.list_subscriptions`
+in Paris, API `/20191001/subscriptions`, with `osp_home_region=eu-paris-1` and
+`compartment_id` set to the tenancy root. Only after a unique list result does it
+invoke `get_subscription` for that identity. The attached failure happened during
+LIST; no plan was observed and GET was not reached. These arguments match the
+[documented OSP SDK interface](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/osp_gateway/client/oci.osp_gateway.SubscriptionServiceClient.html).
+There is no demonstrated SDK argument defect to fix by guessing another endpoint.
+
+`NotAuthorizedOrNotFound` deliberately does not distinguish access denial from
+resource/service availability. The old artifact omitted HTTP status. New reports
+retain only allowlisted SDK service/method and numeric HTTP status, never URLs,
+request arguments, exception messages, headers, subscription PII or identifiers.
+An API failure is NOT proof of FREE_TIER, PAYG or expired Free Trial. Do not infer
+an account plan from that error or from a successful Compute API call.
+The separate OneSubscription API is not an equivalent plan-type fallback.
+
+Minimum Console actions (read-only, no new IAM statements by default):
+1. Select the correct tenancy and Paris home region. Under Identity & Security >
+   Domains > Default > Groups > final-whistle-automation-group, verify that the
+   API-key owner used by Actions is a member. Compare identifiers privately;
+   successful network API reads alone do not prove this group membership.
+2. Under Identity & Security > Policies, select the root compartment and inspect
+   the ALREADY installed subscription grant, domain-qualified group and any
+   conditions. Oracle documents `SUBSCRIPTION_INFO_READ` for List/GetSubscription
+   in its [permission reference](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/subsinvoicepaymenthistoryreference.htm).
+   Do not duplicate the existing grant or grant manage/billing write access.
+3. Under Billing & Cost Management > Subscriptions, inspect the subscription as
+   an authorized administrator. Console access under a different identity is not
+   proof that the Actions API principal has access. Capture plan and effective
+   dates privately; a Console screenshot alone does not satisfy the code gate.
+4. After membership/policy propagation, dispatch the read-only audit. If OSP still
+   fails with correct principal/root policy, ask Oracle Support to confirm OSP
+   subscription API availability, OSP home-region mapping and access for this
+   tenancy/API principal. Provide full request details ONLY in the private support
+   channel. The sanitized HTTP status distinguishes authentication/API failures
+   but cannot resolve Oracle's intentionally ambiguous authorization response.
+
+#### 2. Monthly entitlement: successful API reads, missing consumption evidence
+
+USAGE, USAGE_ONLY and COST all returned an empty list for November 1 through
+November 10 UTC midnight. This is NOT an IAM denial and NOT verified zero usage.
+New reports expose per-query response-row counts, separately from accepted meter
+rows. Do not assume another permission statement will populate empty data.
+
+In Billing & Cost Management > Cost Analysis, use tenancy-wide scope, the same
+UTC date range, no compartment/service filter, and group by SKU and unit. Check
+usage reports and subscription billing-period dates privately. If target meters
+are absent, ask Oracle to confirm Free Tier meter visibility, reporting delay,
+reset boundaries, applicable monthly allowance and post-trial terms. A reliable
+upper bound for delayed/deleted-resource consumption is still necessary; current
+inventory or a newly applied quota cannot prove past usage. Do not create a test
+VM to generate billing rows. Even populated rows do not automatically open this
+gate: the positive entitlement verifier still needs authoritative period/rate and
+reporting-gap evidence.
+
+#### 3. Balanced performance: capacity evidence is not performance tariff evidence
+
+The [Always Free reference](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+covers 200 GB combined home-region boot/block capacity. The
+[boot performance reference](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/update-performance-boot-bv-volume.htm)
+identifies 10 VPU/GB as Balanced and excludes 0-VPU Lower Cost for boot volumes.
+Neither evidence alone determines this tenancy's prospective performance charge.
+Obtain an account-applicable rate-card/subscription entitlement or written Oracle
+clarification explicitly covering BOTH 50 GB boot capacity AND 10 VPU/GB
+performance, allowance sharing and post-trial validity. Zero COST rows, a generic
+eligibility badge or estimator do not prove this. No pricing assertion/override
+was added; this guard intentionally remains BLOCKED pending evidence and a
+separately reviewed verifier.
+
+#### 4. External allocation enforcement: policy missing/ambiguous, not read denied
+
+Quota LIST is authorized. The attached artifact does not disclose whether the
+expected policy name matched zero or multiple policies; the old error combined
+those outcomes. New reports distinguish absence from ambiguity and include the
+expected-name match count. They do not disclose other quota names or identifiers.
+A differently named policy may exist, but cannot satisfy this exact recognizer.
+
+Manual administrator review, NOT an instruction to apply blindly:
+1. Governance & Administration > Limits, Quotas and Usage > Compartment Quotas:
+   select the tenancy ROOT, include all lifecycle states, and inspect the policy
+   named `final-whistle-free-tier-envelope`. Resolve duplicate-name ambiguity
+   privately; do not create another duplicate or edit unrelated policies.
+2. Compare the exact six proposed statements generated by
+   `python -c "import sys; sys.path.insert(0,'scripts/oci'); import allocation_controls as c; print('\n'.join(c.statements()))"`.
+   This command only prints policy text. Obtain separate administrator approval
+   BEFORE creating or changing a root policy. Preserve a private copy of current
+   policies and inspect other applicable quotas/overrides first.
+3. IMPORTANT TENANCY-WIDE IMPACT: the proposal denies A1 allocations in other
+   regions/ADs, caps Paris AD1 at 2 OCPU/12 GB across descendants, denies new
+   block-storage allocation elsewhere, and caps Paris AD1 combined storage at
+   200 GB. It affects unrelated users, compartments, volume creation and growth,
+   not just this bot. It does not delete resources, prove historical usage, or
+   defend against an administrator relaxing the quota. Do not accept this policy
+   if those restrictions conflict with other workloads; obtain a separately
+   reviewed alternative rather than weakening the verifier.
+4. After an approved policy is ACTIVE, rerun only the read-only audit. Both root
+   and target effective-quota readings must be present and within the caps; do
+   not substitute the much larger service-limit headroom. The automation needs
+   read quotas, not manage quotas. Leave the existing read permission unchanged.
+
+No old LaunchInstance Work Request checks were added. No workflow, launch payload,
+retry logic, Issue #11 write path or billing guard was relaxed. A new audit can
+clarify errors but cannot manufacture the missing Oracle evidence. All four
+checks remain release blockers until independently satisfied; keep the enable
+variable false and do not merge/activate on diagnostic success alone.
