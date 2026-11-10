@@ -117,9 +117,11 @@ def run(reader, env, issue_reader):
     for query in ("USAGE", "USAGE_ONLY", "COST"):
         check("api_" + query, report["billing"]["api_access"].get(query) == "READ_SUCCEEDED",
               "read_access_only_empty_rows_do_not_prove_unused_entitlement")
-    check("monthly_entitlement", False, "billing_reset_reporting_gap_and_remaining_allowance_unproven")
+    monthly = decision.get("monthly_entitlement", {"status": "BLOCKED", "reason": "monthly_assessment_unavailable"})
+    check("monthly_entitlement", monthly["status"] == "PASS", monthly["reason"])
     check("balanced_vpu_pricing", False, "prospective_capacity_AND_10_VPU_free_treatment_unproven")
-    check("external_allocation_enforcement", False, "inventory_is_not_an_atomic_OCI_allocation_lock")
+    check("external_allocation_enforcement", report.get("allocation_control", {}).get("current_root_enforcement_verified") is True,
+          "requires_exact_ACTIVE_tenancy_root_quota_not_a_compartment_or_headroom_assumption")
     try:
         existing = p.matching_instance(cli.call("compute", "instance", "list",
             "--compartment-id", env["OCI_COMPARTMENT_OCID"], "--all"))
@@ -130,7 +132,8 @@ def run(reader, env, issue_reader):
                                   "matching_instance_present": existing is not None}
     except Exception:
         check("duplicate_state", False, "instance_or_safety_issue_read_unverified")
-    report["activation_ready"] = False
+    report["activation_ready"] = decision["launch_authorized"] and all(
+        value["status"] == "PASS" for value in checks.values())
     report["read_calls"] = reader.calls
     return report
 

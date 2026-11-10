@@ -405,3 +405,158 @@ failed for required missing evidence; that is not proof of a provisioning/softwa
 failure or a green eligibility result. No LaunchInstance or Issue write was made.
 The observed enable variable remains false. A merge of this audit enhancement
 would not enable provisioning or resolve the listed billing prerequisites.
+
+
+## Exact remaining control setup ? November 10 review
+
+The new research report was read before changes. PRs #23/#24 are merged; this
+work starts from main `1f6882f`. No cloud policy, secret, billing setting, Issue
+state or enable variable is changed by these repository edits.
+
+### Minimum OSP permission and exact Console steps
+
+Oracle's [Subscriptions IAM reference](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/subsinvoicepaymenthistoryreference.htm)
+explicitly maps **both ListSubscriptions and GetSubscription** to
+`SUBSCRIPTION_INFO_READ`, provided by `read subscription`. `inspect` grants none
+for this resource. This is separate from Usage/Cost report access.
+
+An OCI tenancy administrator performs these steps (not executed by this PR):
+
+1. Identity & Security -> Domains -> the API user's identity domain -> Users.
+   Locate the existing user corresponding to the private `OCI_USER_OCID` secret;
+   verify which existing group contains that user. Do not create/rotate a key or
+   add it to Administrators. Open that group and copy its group OCID privately.
+   For legacy IAM, use Identity & Security -> Groups instead.
+2. Identity & Security -> Policies. Select the **tenancy root compartment**.
+3. Create Policy named `final-whistle-subscription-read`; use a non-sensitive
+   description. Select the manual policy editor and add exactly this statement,
+   replacing only the group placeholder with the real group OCID:
+
+   ```text
+   Allow group id <EXISTING_API_GROUP_OCID> to read subscription in tenancy
+   ```
+
+4. Create the policy, wait for IAM propagation, then dispatch the existing Oracle
+   workflow with `audit_only=true`. Keep provisioning disabled. Require consistent
+   `FREE_TIER` from list AND detail; unknown/PAYG/upgrading/multiple results block.
+5. If NotAuthorizedOrNotFound persists, verify the same user/group, root tenancy
+   and OSP interface/account support with Oracle Support. This error alone does
+   not prove which IAM grant is missing. Do not widen to manage billing/accounts,
+   invoices, payments, rate cards or all-resources to suppress it.
+
+The [group OCID syntax](https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/policysyntax.htm)
+avoids guessing the user's identity-domain/group name. Subscription resource is
+singular (`subscription`), not Notifications `ons-subscriptions`.
+
+### Enforced allocation envelope, not a snapshot lock
+
+[allocation_controls.py](../scripts/oci/allocation_controls.py) recognizes one
+strict, root-scoped, ACTIVE quota policy named
+`final-whistle-free-tier-envelope`. It requires matching List/Get identities,
+exact ordered statements (no extras, unset overrides, relaxed caps, child-only
+scope or alternate AD/region), plus effective quota values at root AND target
+for the exact Paris AD: CPU <=2, RAM <=12 and storage <=200.
+Missing/unsupported effective-quota metadata fails closed even when available
+service headroom is 41 OCPUs. This is a verifier, not a quota/IAM writer.
+
+**Separate administrator review/approval required:** the following policy is
+TENANCY-WIDE and prevents A1 and new boot/block capacity outside the allowed AD,
+including unrelated provisioning. It does not delete existing resources or undo
+historical usage. Do not apply blindly if the tenancy is shared.
+
+After approval, Billing & Cost Management -> Limits, Quotas and Usage -> Quota
+Policies (or search Console for Quota Policies). Select the root compartment,
+Create Quota Policy with the exact name above, and paste these six statements in
+this order into ONE policy:
+
+```text
+zero compute-core quotas /standard-a1-*/ in tenancy
+set compute-core quota standard-a1-core-count to 2 in tenancy where request.region = 'eu-paris-1' and request.ad = 'hsNq:EU-PARIS-1-AD-1'
+zero compute-memory quotas /standard-a1-*/ in tenancy
+set compute-memory quota standard-a1-memory-count to 12 in tenancy where request.region = 'eu-paris-1' and request.ad = 'hsNq:EU-PARIS-1-AD-1'
+zero block-storage quota total-storage-gb in tenancy
+set block-storage quota total-storage-gb to 200 in tenancy where request.region = 'eu-paris-1' and request.ad = 'hsNq:EU-PARIS-1-AD-1'
+```
+
+Also grant the existing audit group **read-only quota inspection**, if absent:
+
+```text
+Allow group id <EXISTING_API_GROUP_OCID> to read quotas in tenancy
+```
+
+The automation principal must NOT be able to create/update/delete quotas or
+remove enforcement. Restrict its existing launch permissions to the target
+compartment/network and keep unrelated automation from using its credentials.
+Administrator/root control remains trusted: no software can prevent a tenancy
+administrator from removing a quota or upgrading the account. Do not claim this
+as protection against a malicious administrator or a permanent billing lock.
+
+Oracle documents [root/child usage, statement precedence and region/AD syntax](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/quota_policy_syntax.htm),
+[ordered zero/set allowlists](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/sample_quotas.htm),
+[shared A1 compute/container counters](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/resourcequotas_topic-Compute_Quotas.htm),
+[boot+block storage quota](https://docs.oracle.com/en-us/iaas/Content/Quotas/Concepts/resourcequotas_topic-Block_Volume_Quotas.htm)
+and [quota read permissions](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/quotaspolicyreference.htm).
+Quota enforcement constrains concurrent allocation; it does NOT reserve an OCI
+instance, prove a monthly balance or classify performance charges. After manual
+setup, rerun the audit to verify API acceptance, ACTIVE policy and effective
+values; until that live verification succeeds the control is BLOCKED.
+
+### Conservative monthly gate and a discovered evidence limitation
+
+[monthly_entitlement.py](../scripts/oci/monthly_entitlement.py) validates explicit
+UTC current-calendar-month intervals, known SKU/unit pairs and finite quantities,
+selects ONE usage query source (never doubles USAGE + USAGE_ONLY + COST), and
+compares reported consumption + the fixed VM's remaining-month projection with
+1,500 OCPU-hours / 9,000 GB-hours. Exhaustion, missing rows, unknown units,
+malformed/negative values and invalid intervals reject. The report includes
+observed quantities and an explicitly unknown unreported-usage bound.
+
+**This is a necessary rejection gate, not a complete positive authorization.**
+A correct billing reset/period, authoritative rate validity and an upper bound
+for delayed/missing consumption are still required. Positive or zero rows and a
+new quota cannot prove these. The pinned Oracle SDK's `Quota` model has
+`time_created`, but NO `time_updated`/modification history. Therefore neither an
+old creation date nor current quota values can prove month-long enforcement;
+we do not fabricate such a history. A separately verified complete Oracle audit
+history or account-applicable authoritative meter is required before using a
+historical allocation bound. No manual boolean/report/env override is added.
+
+### Balanced 10 VPU finding and report qualification
+
+Oracle's [Free Tier storage allowance](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+clearly covers capacity, and [Block Volume performance](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/blockvolumeperformance.htm)
+defines the default boot performance as Balanced, 10 VPU/GB. The latest
+[first-instance tutorial](https://docs.oracle.com/en-us/iaas/Content/Compute/tutorials/first-linux-instance/overview.htm)
+also lists 50 GB/Balanced, but that explicit table is in **section 5, optional
+Block Volume**, not a tenancy-specific guarantee for the requested boot-volume
+performance SKU. This qualifies the report's characterization of that example.
+The tutorial is supporting product context, not a prospective billing decision.
+Zero-VPU Lower Cost is unavailable for boot volumes. Neither this repository nor
+the report supplies account-specific performance treatment or post-trial terms.
+Keep this gate BLOCKED until Oracle provides current applicable evidence and a
+reviewed verifier consumes it; do not replace it with an attestation checkbox.
+
+### Activation checklist ? no activation authorized here
+
+- [ ] Minimum subscription-read policy applied by an authorized administrator;
+      fresh list+detail both FREE_TIER, no upgrade/conflict.
+- [ ] Root quota policy and effective values live-verified; API principal cannot
+      relax quotas; administrator agrees to preserve the enforcement.
+- [ ] Complete current inventory/limits/network/image checks PASS, exact target
+      remains Paris A1 / 2 OCPU / 12 GB / Ubuntu ARM64 / 50 GB / 10 VPU.
+- [ ] Oracle-applicable billing period/rates and conservative missing-usage bound
+      established, including deleted resources; monthly gate reviewed to permit
+      a positive decision only from that authoritative evidence.
+- [ ] Free capacity AND Balanced performance treatment established for this
+      tenancy/current and post-trial terms; reviewed verifier implemented.
+- [ ] Full mocked safety suite and read-only audit all mandatory checks PASS.
+- [ ] Issue #11 ready/capacity_rejected, no matching VM or unresolved launch;
+      retain pending/created protections and existing retry identity rules.
+- [ ] PR independently reviewed/merged only with separate approval; run fresh
+      main audit after merge; then obtain separate explicit activation approval.
+- [ ] Only AFTER that approval change enable variable; never use this checklist
+      as permission to upgrade, launch, change secrets or alter Issue #11.
+
+Current work preserves the cron and hard billing gate. External enforcement can
+become PASS from exact authoritative quota reads; monthly/billing remain BLOCKED
+where evidence is missing. No cloud or IAM policy has been applied by this PR.

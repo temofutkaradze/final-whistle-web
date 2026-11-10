@@ -1,5 +1,6 @@
 """Evidence checks, not a prospective Oracle pricing oracle. No resource writes."""
 import math
+import monthly_entitlement
 
 REGION = "eu-paris-1"
 SHAPE = "VM.Standard.A1.Flex"
@@ -64,10 +65,18 @@ def assess(report, payload, env):
                 blockers.append(scope + "_" + name + "_quota_unverified")
     # Verified FREE_TIER is account-plan evidence, not a remaining monthly meter
     # or a free capacity+VPU tariff. Do not downgrade these to warning/override.
-    blockers.extend(("complete_tenancy_visibility_and_external_allocation_enforcement_unproven",
-                     "monthly_meter_reporting_gap_and_rate_validity_unproven",
-                     "prospective_boot_capacity_AND_Balanced_VPU_free_treatment_unproven"))
-    return {"launch_authorized": False, "blockers": blockers}
+    control = report.get("allocation_control", {})
+    # Only the allowlisted root List/GetQuota path produces this evidence; no
+    # environment flag or observed free headroom may substitute for the policy.
+    if control.get("current_root_enforcement_verified") is not True:
+        blockers.append("complete_tenancy_visibility_and_external_allocation_enforcement_unproven")
+    monthly = monthly_entitlement.assess(report)
+    if monthly["status"] != "PASS":
+        blockers.append("monthly_meter_reporting_gap_and_rate_validity_unproven")
+    # No supported prospective capacity AND VPU tariff verifier is available.
+    blockers.append("prospective_boot_capacity_AND_Balanced_VPU_free_treatment_unproven")
+    return {"launch_authorized": not blockers, "blockers": blockers,
+            "monthly_entitlement": monthly}
 
 
 def collect(env):
