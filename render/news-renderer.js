@@ -2,6 +2,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const {prepareStandingsBackground,normalizeStandingsCrest}=require('./standings-artwork.js');
 const {withPageDeadline}=require("./operations.js");
 
 module.exports = function createNewsRenderer({
@@ -40,9 +41,10 @@ module.exports = function createNewsRenderer({
       ) {
         throw new Error(`Invalid ${name} image dimensions`);
       }
+      return metadata;
     }
 
-    await validateImage(background, "background");
+    const backgroundMeta=await validateImage(background, "background");
     await validateImage(circle, "circle");
     
     const { buildHtml } = await import(
@@ -50,23 +52,31 @@ module.exports = function createNewsRenderer({
     );
 
     // Normalize orientation (phone EXIF) before Chromium sees the bytes.
-    const bg = await sharp(background).rotate().png().toBuffer();
+    // Standings embeds unchanged primary bytes unless EXIF needs orientation.
+    // Existing News layouts keep their original normalization path.
+    const prepared=job.layout==='standings'?await prepareStandingsBackground(background,backgroundMeta):null;
+    const bg = prepared?prepared.primary:await sharp(background).rotate().png().toBuffer();
     const secondary = circle ? await sharp(circle).rotate().png().toBuffer() : null;
     let html;
     if(job.layout==='standings'){
       const {validateTable}=await import('../src/lib/news/standings.ts');
       validateTable(job.standings,job.standings?.leagueId,Date.now(),true);
-      const normalized=[];
+      const normalized=[],backings=[];
       for(const value of [job.standings.leagueLogo,...job.standings.rows.map(r=>r.crest)]){
         const bytes=Buffer.from(value,'base64');
         await validateImage(bytes,'standings crest');
         const meta=await sharp(bytes,{limitInputPixels:25_000_000}).metadata();
         if((meta.pages??1)>1||meta.width>1024||meta.height>1024)throw new Error('Invalid standings crest dimensions or animation');
-        normalized.push((await sharp(bytes,{limitInputPixels:1024*1024}).rotate().png().toBuffer()).toString('base64'));
+        const artwork=await normalizeStandingsCrest(bytes);
+        normalized.push(artwork.png.toString('base64'));backings.push(artwork.lightBacking);
       }
       job={...job,standings:{...job.standings,leagueLogo:normalized[0],rows:job.standings.rows.map((r,i)=>({...r,crest:normalized[i+1]}))}};
       const {buildStandingsHtml}=await import('../src/lib/news/standings-html.ts');
-      html=buildStandingsHtml(job,bg);
+      const {clubDisplayName}=await import('../src/lib/news/club-display-names.ts');
+      const reviewCount=job.standings.rows.filter(r=>clubDisplayName(r).needsReview).length;
+      if(reviewCount)console.warn('Standings artwork: '+reviewCount+' unmapped club name(s) need review; original names retained.');
+      // One deterministic cover crop; no backdrop copy or subject detection.
+      html=buildStandingsHtml(job,bg,backings.slice(1));
     }else html=buildHtml(job, bg, secondary);
 
     // Separate browser context: Match rendering remains isolated.

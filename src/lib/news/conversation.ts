@@ -6,12 +6,18 @@ export type PendingNews={background?:string;circle?:string|null;ts?:number};
 export type NewsMessage={text?:string;caption?:string;document?:{file_id:string;mime_type?:string;file_name?:string};photo?:{file_id:string}[]};
 export type NewsTransition={pending:PendingNews|null;reply:string}|{pending:null;job:Job;background:string;circle:string|null};
 
+// Upload metadata is only a hint; download and renderer validate actual bytes.
+// Keep News and standings document/photo acceptance identical.
+export function newsImageFileId(message:NewsMessage):string|undefined{
+  const doc=message.document;
+  return doc&&((doc.mime_type??'').startsWith('image/')||/\.(jpe?g|png|webp)$/i.test(doc.file_name??''))?doc.file_id:message.photo?.at(-1)?.file_id;
+}
+
 // Pure local equivalent of Parse Message; no Telegram calls or live n8n execution.
 export function originalNewsTransition(message:NewsMessage,pending:PendingNews|null,now:number,config?:unknown):NewsTransition{
   let p=pending?.background?{...pending}:null;
   if(p&&now-(p.ts??0)>60*60_000)p=null;
-  const doc=message.document;
-  const fileId=doc&&((doc.mime_type??'').startsWith('image/')||/\.(jpe?g|png|webp)$/i.test(doc.file_name??''))?doc.file_id:message.photo?.at(-1)?.file_id;
+  const fileId=newsImageFileId(message);
   const text=(message.text??'').trim(); // Photo captions are intentionally ignored.
   if(fileId){
     if(!p||p.circle)return {pending:{background:fileId,circle:null,ts:now},reply:BACKGROUND_SAVED};
