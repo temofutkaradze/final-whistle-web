@@ -20,3 +20,6 @@ render/output/
 /preview-images/
 /docs/previews/
 /tests/fixtures/photos/visual-review-cc0.jpg
+
+# Private, unmodified Telegram upload regression fixture (never publish)
+/tests/fixtures/photos/IMG_8334.JPG

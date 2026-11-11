@@ -1,4 +1,5 @@
 // Provider-neutral standings domain. No network, credentials or historical fallback.
+import { newsImageFileId } from './conversation.ts';
 import { LEAGUES } from '../leagues.ts';
 import { uclOrderProblem } from './ucl-order.ts';
 export class StandingsError extends Error {
@@ -28,7 +29,8 @@ export function seasonEndExclusive(value:unknown):number{
 export type StandingRow={position:number;displayRow?:number;teamId:string;name:string;played:number;goalDifference:number;points:number;crest:string};
 // Logos are approved raster bytes encoded as base64, never URLs or SVG markup.
 export type StandingsTable={leagueId:number;seasonStart:string;seasonEnd:string;source:string;fetchedAt:number;leagueLogo:string;totalTeams:number;rows:StandingRow[]};
-export type StandingsJob={layout:'standings';author:string;quote:string;caption:string;pos:{b:[number,number,number];c:[number,number,number]};standings:StandingsTable};
+export type StandingsComposition={backgroundX?:number;backgroundY?:number;panelOffset?:number};
+export type StandingsJob={layout:'standings';author:string;quote:string;caption:string;pos:{b:[number,number,number];c:[number,number,number]};standings:StandingsTable;composition?:StandingsComposition};
 export function validateTable(table:StandingsTable,leagueId:number,now=Date.now(),selected=false):StandingsTable{
   const fail=()=>{throw new StandingsError('STANDINGS_DATA','Current standings are incomplete, ambiguous or unavailable. Please try later.');};
   if(!table||!standingsLeagues.some(l=>l.id===leagueId)||table.leagueId!==leagueId||typeof table.source!=='string'||!table.source.trim()||table.source.length>160||!Number.isFinite(table.fetchedAt)||table.fetchedAt>now+60_000||now-table.fetchedAt>60*60_000)fail();
@@ -73,10 +75,10 @@ export function createStandingsService(provider:StandingsProvider|null,now=Date.
   };
 }
 export type StandingsPending={kind:'standings';background?:string;leagueId?:number;positions?:number[];ts:number};
-export function standingsTransition(msg:{text?:string;caption?:string;photo?:{file_id:string}[];document?:{file_id:string;mime_type?:string}},raw:unknown,now:number):null|{pending:StandingsPending|null;reply:string}|{pending:null;background:string;request:{leagueId:number;positions:number[]};collection:StandingsPending}{
+export function standingsTransition(msg:{text?:string;caption?:string;photo?:{file_id:string}[];document?:{file_id:string;mime_type?:string;file_name?:string}},raw:unknown,now:number):null|{pending:StandingsPending|null;reply:string}|{pending:null;background:string;request:{leagueId:number;positions:number[]};collection:StandingsPending}{
   let p=raw&&typeof raw==='object'&&(raw as StandingsPending).kind==='standings'?raw as StandingsPending:null;
   if(p&&now-p.ts>60*60_000)p=null;
-  const file=msg.document?.mime_type?.match(/^image\/(jpeg|png|webp)$/)?msg.document.file_id:msg.photo?.at(-1)?.file_id;
+  const file=newsImageFileId(msg);
   let text=(msg.text??msg.caption??'').trim();
   const command=/^\/standings(?:@\w+)?(?:\s|$)/i.test(text);
   const direct=Object.keys(aliases).sort((a,b)=>b.length-a.length).find(alias=>text.toLowerCase()===alias||text.toLowerCase().startsWith(alias+' ')||text.toLowerCase().startsWith(alias+'\n'));

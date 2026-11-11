@@ -4,6 +4,11 @@ import { readFile, unlink } from 'node:fs/promises';
 import { dirname, basename, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
+import {existsSync} from 'node:fs';
+import {standingsTransition} from '../src/lib/news/standings';
+// @ts-expect-error Runtime JavaScript module has no declaration file.
+import {createNewsHandler} from '../scripts/lib/news-core.mjs';
+import {vi} from 'vitest';
 import {fictionalTable} from './standings-fixture';
 import {createStandingsService} from '../src/lib/news/standings';
 import { buildJob } from '@/lib/news/parse';
@@ -75,6 +80,48 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     job.standings.rows[0].crest=Buffer.from('<svg onload="alert(1)"></svg>').toString('base64');
     expect((await post({job,background:background.toString('base64'),circle:null})).status).toBe(500);
   });
+  for(const [width,height] of [[600,900],[800,800],[1200,675]])it('fills the canvas without bars for '+width+'x'+height,async()=>{
+    const photo=await sharp({create:{width,height,channels:3,background:'#4e92ac'}}).jpeg().toBuffer();
+    const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable()})(39,[1,2,3]);
+    const r=await post({job,background:photo.toString('base64'),circle:null});expect(r.status).toBe(200);const out=await r.json();outputs.add(out.jpg_path);
+    const {data,info}=await sharp(await readFile(out.jpg_path)).raw().toBuffer({resolveWithObject:true});expect(info).toMatchObject({width:1080,height:1350});
+    // The single cover-fitted source reaches all edges, including former margins.
+    for(const [x,y] of [[5,5],[1074,5],[5,600],[1074,600]]){const i=(y*info.width+x)*info.channels;expect(data[i+1]).toBeGreaterThan(50);expect(data[i+2]).toBeGreaterThan(70);}
+  },90_000);
+  it('applies explicit horizontal and vertical cover positions to actual JPEG pixels',async()=>{
+    const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable()})(39,[1,2,3]);
+    const horizontal=await sharp({create:{width:1200,height:600,channels:3,background:'#00aa00'}}).composite([
+      {input:await sharp({create:{width:600,height:600,channels:3,background:'#ee2020'}}).png().toBuffer(),left:0,top:0},
+      {input:await sharp({create:{width:600,height:600,channels:3,background:'#2030ee'}}).png().toBuffer(),left:600,top:0},
+    ]).png().toBuffer();
+    const vertical=await sharp({create:{width:400,height:1200,channels:3,background:'#00aa00'}}).composite([
+      {input:await sharp({create:{width:400,height:600,channels:3,background:'#ee2020'}}).png().toBuffer(),left:0,top:0},
+      {input:await sharp({create:{width:400,height:600,channels:3,background:'#2030ee'}}).png().toBuffer(),left:0,top:600},
+    ]).png().toBuffer();
+    for(const [photo,composition,channel] of [
+      [horizontal,{backgroundX:0},0],[horizontal,{backgroundX:100},2],
+      [vertical,{backgroundY:0},0],[vertical,{backgroundY:100},2],
+    ] as const){
+      const response=await post({job:{...job,composition},background:photo.toString('base64'),circle:null});expect(response.status).toBe(200);
+      const result=await response.json();outputs.add(result.jpg_path);
+      const {data}=await sharp(await readFile(result.jpg_path)).extract({left:10,top:10,width:1,height:1}).removeAlpha().raw().toBuffer({resolveWithObject:true});
+      expect(data[channel]).toBeGreaterThan(200);expect(data[channel===0?2:0]).toBeLessThan(70);
+    }
+    expect((await post({job:{...job,composition:{backgroundX:'0%;transform:scale(10)'}},background:horizontal.toString('base64'),circle:null})).status).toBe(500);
+  },90_000);
+  const originalPath=process.env.STANDINGS_TEST_PHOTO??resolve(root,'tests/fixtures/photos/IMG_8334.JPG');
+  (existsSync(originalPath)?it:it.skip)('accepts unmodified IMG_8334.JPG document through the authorized handler and real renderer',async()=>{
+    const photo=await readFile(originalPath);expect(await sharp(photo).metadata()).toMatchObject({format:'jpeg'});
+    const state:any={botToken:'fictional',telegramChatId:'42',pending:null,lastUpdateId:null,defaultTemplateRef:'single'};
+    const settings={findUnique:async()=>structuredClone(state),updateMany:async({where,data}:any)=>{if(where.OR&&state.lastUpdateId!==null&&state.lastUpdateId>=where.OR[1].lastUpdateId.lt)return {count:0};Object.assign(state,data);return {count:1};}};
+    const sendDocument=vi.fn(async()=>{});
+    const handle=createNewsHandler({prisma:{newsSettings:settings},tg:{sendMessage:async()=>({ok:true}),sendDocument},ownerId:'test',connectionToken:'fictional',download:async()=>photo,cleanup:async()=>{},standings:createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}),render:async(job:unknown,bytes:Buffer)=>{
+      expect(bytes).toEqual(photo);const r=await post({job,background:bytes.toString('base64'),circle:null});expect(r.status).toBe(200);const out=await r.json();outputs.add(out.jpg_path);expect(await sharp(await readFile(out.jpg_path)).metadata()).toMatchObject({width:1080,height:1350,format:'jpeg'});return out.jpg_path;
+    }});
+    const message={document:{file_id:'original-jpg',file_name:'IMG_8334.JPG',mime_type:'application/octet-stream'},caption:'Premier League 1 2 3',chat:{id:42,type:'private'},from:{id:42}};
+    expect(standingsTransition(message,null,Date.now())).toMatchObject({background:'original-jpg'});
+    const update={update_id:1,message};await handle(update);await handle(update);expect(sendDocument).toHaveBeenCalledTimes(1);
+  },90_000);
   it('rejects a circle layout without its secondary image',async()=>{
     const response=await post({job:buildJob('Author | News',true,'left'),background:background.toString('base64'),circle:null});expect(response.status).toBe(500);
   });
