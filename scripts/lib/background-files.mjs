@@ -29,7 +29,8 @@ export async function assignPendingBackground(db, userId, file, fixtureId) {
     // Conditional consumption also serializes concurrent callbacks and avoids overwriting a newer upload.
     const consumed = await tx.user.updateMany({where:{id:userId,pendingBackgroundPath:file},data:{pendingBackgroundPath:null}});
     if (!consumed.count) return {count:0};
-    return tx.selection.updateMany({where:{userId,status:'SELECTED',...(fixtureId === 'all' ? {} : {fixtureId})},data:{backgroundPath:resolved}});
+    // Replacing a background never resets status, attempts or delivery receipts, including after FT.
+    return tx.selection.updateMany({where:{userId,status:{not:'DESELECTED'},...(fixtureId === 'all' ? {} : {fixtureId})},data:{backgroundPath:resolved}});
   });
 }
 

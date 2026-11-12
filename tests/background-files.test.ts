@@ -8,9 +8,10 @@ const io=()=>({realpath:vi.fn(async(p:string)=>p),lstat:vi.fn(async()=>({isFile:
 function deferred(){let resolve!:()=>void;const promise=new Promise<void>(r=>resolve=r);return {promise,resolve};}
 beforeEach(()=>{db=createFakeDb({now:0});db.tables.user.push({id:'u1',pendingBackgroundPath:file});db.tables.selection.push({id:'one',userId:'u1',fixtureId:1,status:'SELECTED'},{id:'two',userId:'u1',fixtureId:2,status:'SELECTED'},{id:'other',userId:'u2',fixtureId:3,status:'SELECTED'},{id:'claimed',userId:'u1',fixtureId:4,status:'SENDING'});});
 describe('background reference coordination (all filesystem operations mocked)',()=>{
- it('preserves assign-to-all, ownership, SELECTED filtering and single pending consumption',async()=>{
-  const query=vi.spyOn(db.prisma,'$queryRaw');expect(await assignPendingBackground(db.prisma,'u1',file,'all')).toEqual({count:2});
-  expect(db.tables.selection.filter(s=>s.backgroundPath===file).map(s=>s.id)).toEqual(['one','two']);
+ it('preserves assign-to-all, ownership, selected-history filtering and single pending consumption',async()=>{
+  db.tables.selection.push({id:'removed',userId:'u1',fixtureId:5,status:'DESELECTED'});
+  const query=vi.spyOn(db.prisma,'$queryRaw');expect(await assignPendingBackground(db.prisma,'u1',file,'all')).toEqual({count:3});
+  expect(db.tables.selection.filter(s=>s.backgroundPath===file).map(s=>s.id)).toEqual(['one','two','claimed']);
   expect(await assignPendingBackground(db.prisma,'u1',file,'all')).toEqual({count:0});expect(query).toHaveBeenCalled();expect(Array.from(query.mock.calls[0][0] as TemplateStringsArray).join('')).toContain('pg_advisory_xact_lock');expect(typeof query.mock.calls[0][1]).toBe('bigint');
  });
  it('assigns one chosen fixture and does not consume another upload through a stale callback',async()=>{
@@ -40,7 +41,14 @@ describe('background reference coordination (all filesystem operations mocked)',
   const cleaning=deleteUnusedBackground(db.prisma,file,fs);await ready.promise;const assigning=assignPendingBackground(db.prisma,'u1',file,'all');release.resolve();expect(await cleaning).toBe(true);expect(await assigning).toEqual({count:0});expect(db.tables.selection.every(s=>!s.backgroundPath)).toBe(true);
  });
  it('allows only one of two concurrent assignment callbacks to consume the upload',async()=>{
-  const results=await Promise.all([assignPendingBackground(db.prisma,'u1',file,'all'),assignPendingBackground(db.prisma,'u1',file,'all')]);expect(results.map(r=>r.count)).toEqual([2,0]);
+  const results=await Promise.all([assignPendingBackground(db.prisma,'u1',file,'all'),assignPendingBackground(db.prisma,'u1',file,'all')]);expect(results.map(r=>r.count)).toEqual([3,0]);
+ });
+ it('replaces a finished selection photo repeatedly without changing final/live delivery tracking',async()=>{
+  const selected=db.tables.selection[0];Object.assign(selected,{status:'COMPLETED',backgroundPath:'old.jpg',sentAt:new Date(10),liveStatus:'SENT',liveDispatchAt:new Date(5),finalDispatchAt:new Date(10),attempts:2});
+  const before={...selected};expect(await assignPendingBackground(db.prisma,'u1',file,1)).toEqual({count:1});
+  expect(selected).toMatchObject({...before,backgroundPath:file});
+  const next=path.join(ROOT,'replacement.jpg');db.tables.user[0].pendingBackgroundPath=next;
+  expect(await assignPendingBackground(db.prisma,'u1',next,1)).toEqual({count:1});expect(selected).toMatchObject({...before,backgroundPath:next});
  });
  it('rolls pending consumption back if assigning the selections fails',async()=>{
   db.failNext('selection','updateMany',new Error('database unavailable'));await expect(assignPendingBackground(db.prisma,'u1',file,'all')).rejects.toThrow('database unavailable');expect(db.tables.user[0].pendingBackgroundPath).toBe(file);

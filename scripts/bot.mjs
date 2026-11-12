@@ -110,14 +110,13 @@ async function handleUpload(ctx, msg, chatId) {
   const open = await prisma.selection.findMany({
     where: {
       userId: user.id,
-      status: "SELECTED",
-      match: { kickoff: { gte: new Date(Date.now() - MAX_AGE_HOURS * 3600e3) } },
+      status: { not: "DESELECTED" },
     },
     include: { match: true },
     orderBy: { createdAt: "asc" },
   });
   if (!open.length) {
-    await tg.sendMessage(chatId, "Select a match first with /matches, then send the background image.");
+    await tg.sendMessage(chatId, "No matches selected. Please select a match first.");
     return;
   }
 
@@ -130,12 +129,6 @@ async function handleUpload(ctx, msg, chatId) {
   }
 
   if(!await findUser(ctx,chatId))return;
-  if (open.length === 1) {
-    await withBackgroundFile(prisma,file,(tx,resolved)=>tx.selection.update({ where: { id: open[0].id }, data: { backgroundPath: resolved } }));
-    await tg.sendMessage(chatId, `Background saved for ${open[0].match.homeTeam} - ${open[0].match.awayTeam}.`);
-    return;
-  }
-
   await withBackgroundFile(prisma,file,(tx,resolved)=>tx.user.update({ where: { id: user.id }, data: { pendingBackgroundPath: resolved } }));
   const buttons = open.map((s) => [{ text: `⚽ ${s.match.homeTeam} - ${s.match.awayTeam}`, callback_data: `bg:${s.fixtureId}` }]);
   buttons.push([{ text: "All my selected matches", callback_data: "bg:all" }]);
