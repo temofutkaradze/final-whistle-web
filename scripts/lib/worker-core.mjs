@@ -7,7 +7,7 @@ import {isLiveCheckpoint} from './live-checkpoint.mjs';
 // match data, render server, Telegram, the clock) is handed in, so tests can replace all of it.
 //
 // Rules (same as the n8n workflow it replaced):
-//   - wait 110 min after kickoff, give up after 24 h
+//   - wait 107 min after kickoff, give up after 24 h
 //   - status check = 1 request per day list; events = 1 request per finished match; the result is shared by all customers
 //   - old matches are deleted from our database after 48 h
 //

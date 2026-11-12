@@ -159,13 +159,13 @@ describe("worker: the normal path", () => {
     expect(tg.sendDocument).toHaveBeenCalledTimes(1);
   });
 
-  it("waits 110 minutes after kickoff, and does not touch the API before that", async () => {
-    addMatch(1, { kickoff: new Date(T0 - 100 * MIN), statusShort: "2H" });
+  it("waits exactly 107 minutes after kickoff, and does not touch the API before that", async () => {
+    addMatch(1, { kickoff: new Date(T0 - 106 * MIN), statusShort: "2H" });
     addSel("s1", "u1", 1);
     const core = makeCore();
     await core.tick();
     expect(football.refreshStatuses).not.toHaveBeenCalled();
-    advance(11);
+    advance(1);
     await core.tick();
     expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
   });
@@ -591,6 +591,35 @@ describe('reference-safe match retention',()=>{
   });
 });
 
+describe('initial-delay request-count impact',()=>{
+  it.each([
+    [109,[110],[107,117]],
+    [116,[110,120],[107,117]],
+    [119,[110,120],[107,117,127]],
+  ])('compares 110 vs 107 for full time at elapsed %s without changing final event calls',async(finish,oldChecks,newChecks)=>{
+    const simulate=async(delay:number)=>{
+      clock={now:T0};db=createFakeDb(clock);addUser('u1');
+      addMatch(1,{kickoff:new Date(T0),statusShort:'2H'});addSel('s1','u1',1);
+      apiEvents[1]=[];renderPost.mockClear();tg.sendDocument.mockClear();football.fetchEvents.mockClear();
+      const checks:number[]=[];
+      football.refreshStatuses.mockImplementation(async()=>{
+        const elapsedWall=(clock.now-T0)/MIN;checks.push(elapsedWall);
+        if(elapsedWall>=finish)Object.assign(match(1),{statusShort:'FT',homeScore:0,awayScore:0,lastCheckedAt:new Date(clock.now)});
+        else observeLive(1,elapsedWall<110?88:90,null,0,0);
+      });
+      const core=makeCore({config:{...config,DELAY_MINUTES:delay}});
+      for(let minute=0;minute<=140;minute++){clock.now=T0+minute*MIN;await core.tick();}
+      expect(sel('s1').status).toBe('COMPLETED');expect(football.fetchEvents).toHaveBeenCalledTimes(1);
+      expect(tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('Full Time'))).toHaveLength(1);
+      expect(tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('90+ Live Checkpoint')).length).toBeLessThanOrEqual(1);
+      expect(checks.every((value,i)=>i===0||value-checks[i-1]>=10)).toBe(true);
+      return checks;
+    };
+    expect(await simulate(110)).toEqual(oldChecks);
+    expect(await simulate(107)).toEqual(newChecks);
+  });
+});
+
 describe('live checkpoint and independent final delivery',()=>{
   it('processes a cached previous-day selection with its assigned photo through both stages',async()=>{
     const file=path.resolve('storage/backgrounds/previous-day.jpg');
@@ -613,7 +642,7 @@ describe('live checkpoint and independent final delivery',()=>{
     expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('s1').liveDispatchAt).toBeInstanceOf(Date);
   });
   it.each([[88,null,0],[90,null,1],[90,3,1],[90,5,1]])('observes %s+%s using the existing schedule',async(elapsed,extra,sends)=>{
-    addMatch(1,{kickoff:new Date(T0-109*MIN)});addSel('s1','u1',1);
+    addMatch(1,{kickoff:new Date(T0-106*MIN)});addSel('s1','u1',1);
     football.refreshStatuses.mockImplementation(async()=>{observeLive(1,elapsed,extra);});
     const core=makeCore();await core.tick();expect(football.refreshStatuses).not.toHaveBeenCalled();
     advance(1);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
