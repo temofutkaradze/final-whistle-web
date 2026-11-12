@@ -5,6 +5,11 @@ import {sendMessage,sendDocument} from '@/lib/telegram';
 import {makeTelegram,readTelegramImage,MAX_TELEGRAM_IMAGE} from '../scripts/lib/telegram.mjs';
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();files.writeFile.mockClear();files.mkdir.mockClear();});
 describe('website Telegram deadlines without retries',()=>{
+ it('identifies document read failures before any Telegram dispatch',async()=>{
+  files.readFile.mockRejectedValueOnce(Object.assign(new Error('missing file'),{code:'ENOENT'}));
+  const fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);
+  await expect(makeTelegram('fake').sendDocument('1','/missing.jpg','caption')).rejects.toMatchObject({deliveryNotAttempted:true});expect(fetcher).not.toHaveBeenCalled();
+ });
  it('uses explicit 30s message and 90s document deadlines',async()=>{
   const timer=vi.spyOn(AbortSignal,'timeout');const fetcher=vi.fn(async()=>new Response(JSON.stringify({ok:true})));vi.stubGlobal('fetch',fetcher);
   await sendMessage('1','hello','fake');await sendDocument('1','/fake/post.jpg','caption','fake');expect(timer.mock.calls.map(c=>c[0])).toEqual([30000,90000]);expect(fetcher).toHaveBeenCalledTimes(2);

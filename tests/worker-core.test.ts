@@ -4,6 +4,9 @@ import * as config from "../scripts/lib/config.mjs";
 import { buildEventsHtml } from "../scripts/lib/events.mjs";
 import { classifyError, createBackoff, createWorkerCore } from "../scripts/lib/worker-core.mjs";
 import { createFakeDb } from "./helpers/fake-prisma";
+import {checkpointFromFixture} from '../scripts/lib/live-checkpoint.mjs';
+import {toggleSelection} from '../scripts/lib/selection.mjs';
+import {assignPendingBackground} from '../scripts/lib/background-files.mjs';
 
 // The worker's decisions, run against an in-memory database with fake match data, render server and Telegram.
 // A tick() is one round of the worker (it runs once a minute). The clock is moved by hand.
@@ -64,12 +67,20 @@ function addMatch(fixtureId: number, extra: Record<string, unknown> = {}) {
   liveStatus[fixtureId] ??= String(extra.statusShort ?? "NS");
 }
 function addSel(id: string, userId: string, fixtureId: number, extra: Record<string, unknown> = {}) {
-  db.tables.selection.push({ id, userId, fixtureId, status: "SELECTED", backgroundPath: null, attempts: 0, lastError: null, sentAt: null, createdAt: new Date(T0 - 3 * 3600e3), updatedAt: new Date(T0 - 3 * 3600e3), ...extra });
+  db.tables.selection.push({ id, userId, fixtureId, status: "SELECTED", liveStatus:'PENDING',liveAttempts:0, backgroundPath: null, attempts: 0, lastError: null, sentAt: null, createdAt: new Date(T0 - 3 * 3600e3), updatedAt: new Date(T0 - 3 * 3600e3), ...extra });
 }
 const sel = (id: string) => db.tables.selection.find((s) => s.id === id)!;
 const match = (id: number) => db.tables.match.find((m) => m.fixtureId === id)!;
 const advance = (minutes: number) => (clock.now += minutes * MIN);
 const finishedWithEvents = (id: number, hs = 1, as = 0) => addMatch(id, { statusShort: "FT", homeScore: hs, awayScore: as, eventsJson: hs + as ? [GOAL(10)] : [] });
+
+// A scheduled provider observation: same fixture-list request, no event calls.
+function observeLive(id=1, elapsed=90, extra:number|null=null, home=2, away=1, status='2H') {
+  const shot=checkpointFromFixture({fixture:{status:{short:status,elapsed,extra}},goals:{home,away}},new Date(clock.now));
+  Object.assign(match(id),{statusShort:status,elapsedMinutes:elapsed,extraMinutes:extra,homeScore:home,awayScore:away,lastCheckedAt:new Date(clock.now)});
+  liveStatus[id]=status;
+  if(shot&&!match(id).liveCheckpointAt)Object.assign(match(id),{liveCheckpointAt:new Date(clock.now),liveCheckpointJson:shot});
+}
 
 beforeEach(() => {
   clock = { now: T0 };
@@ -140,7 +151,7 @@ describe("worker: the normal path", () => {
     expect(renderPost).toHaveBeenCalledTimes(1);
     expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", league_id: 39, home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
     expect(tg.sendDocument).toHaveBeenCalledTimes(1);
-    expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Alpha FC 2-1 Beta FC");
+    expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Full Time — Alpha FC 2-1 Beta FC");
     expect(sel("s1")).toMatchObject({ status: "COMPLETED", sentAt: new Date(T0) });
     await core.tick();
     advance(5);
@@ -577,6 +588,108 @@ describe('reference-safe match retention',()=>{
     const expired=['utc:2026-10-01|39,78','utc:2026-10-06|39','2026-10-01'];
     const kept=['utc:2026-10-07|39,78','utc:2026-10-10|39','2026-10-07','2026-10-10','!unrelated','utc:2026-10-01|not-a-league','utc:2026-02-31|39','2026-10-01-notes'];
     db.tables.fixtureDay.push(...[...expired,...kept].map(date=>({date})));await makeCore().cleanup();expect(db.tables.fixtureDay.map(x=>x.date)).toEqual(kept);
+  });
+});
+
+describe('live checkpoint and independent final delivery',()=>{
+  it('processes a cached previous-day selection with its assigned photo through both stages',async()=>{
+    const file=path.resolve('storage/backgrounds/previous-day.jpg');
+    addMatch(1,{day:'2026-10-09'});db.tables.user[0].pendingBackgroundPath=file;
+    await toggleSelection({prisma:db.prisma,userId:'u1',fixtureId:1,maxAgeHours:24,now:clock.now});
+    await assignPendingBackground(db.prisma,'u1',file,1);observeLive();
+    const core=makeCore({pickBackground:async(s:{backgroundPath:string})=>({background_path:s.backgroundPath})});
+    await core.tick();Object.assign(match(1),{statusShort:'FT',eventsJson:[]});await core.tick();
+    expect(renderPost.mock.calls.map(c=>c[0].background_path)).toEqual([file,file]);expect(tg.sendDocument).toHaveBeenCalledTimes(2);
+  });
+  it('does not deliver a live image after pairing is revoked during rendering',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();renderPost.mockImplementationOnce(async()=>{db.tables.matchTelegramBinding.length=0;return '/tmp/post.jpg';});
+    await makeCore().tick();expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('s1')).toMatchObject({status:'SELECTED',liveStatus:'PENDING'});
+  });
+  it('does not dispatch after worker lock loss during the durable fence write',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();let active=true;
+    const update=db.prisma.selection.updateMany;
+    db.prisma.selection.updateMany=async(args:any)=>{const result=await update(args);if(args.data.liveDispatchAt)active=false;return result;};
+    await expect(makeCore({isActive:()=>active}).tick()).rejects.toThrow('MATCH_WORKER_LOCK_LOST');
+    expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('s1').liveDispatchAt).toBeInstanceOf(Date);
+  });
+  it.each([[88,null,0],[90,null,1],[90,3,1],[90,5,1]])('observes %s+%s using the existing schedule',async(elapsed,extra,sends)=>{
+    addMatch(1,{kickoff:new Date(T0-109*MIN)});addSel('s1','u1',1);
+    football.refreshStatuses.mockImplementation(async()=>{observeLive(1,elapsed,extra);});
+    const core=makeCore();await core.tick();expect(football.refreshStatuses).not.toHaveBeenCalled();
+    advance(1);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
+    expect(football.fetchEvents).not.toHaveBeenCalled();expect(sel('s1').status).toBe('SELECTED');
+    if(sends){expect(renderPost.mock.calls[0][0]).toMatchObject({fixture_id:'1_s1_live',home_score:2,away_score:1,total_events:0,home_events_html:'',away_events_html:''});expect(String(tg.sendDocument.mock.calls[0][2])).toContain('90+ Live Checkpoint');}
+    advance(9);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
+    advance(1);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
+  });
+  it.each([1,2])('sends final independently, including equal scores (away=%s), without extra API requests',async away=>{
+    addMatch(1);addSel('s1','u1',1);football.refreshStatuses.mockImplementation(async()=>observeLive());
+    await makeCore().tick();expect(sel('s1')).toMatchObject({status:'SELECTED',liveStatus:'SENT'});
+    // Recreate the worker: persistent stage tracking, not an in-memory dedupe.
+    advance(10);football.refreshStatuses.mockImplementation(async()=>Object.assign(match(1),{statusShort:'FT',homeScore:2,awayScore:away,lastCheckedAt:new Date(clock.now)}));
+    apiEvents[1]=[GOAL(10)];const restarted=makeCore();await restarted.tick();await restarted.tick();
+    expect(tg.sendDocument).toHaveBeenCalledTimes(2);expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(football.fetchEvents).toHaveBeenCalledTimes(1);
+    expect(renderPost.mock.calls[1][0]).toMatchObject({fixture_id:'1_s1',home_score:2,away_score:away});
+    expect(String(tg.sendDocument.mock.calls[1][2])).toContain('Full Time');expect(sel('s1').status).toBe('COMPLETED');
+  });
+  it('fails live rendering without blocking final or consuming final attempts',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();renderPost.mockRejectedValueOnce(new Error('broken template'));
+    const core=makeCore();await core.tick();expect(sel('s1')).toMatchObject({status:'SELECTED',attempts:0,liveAttempts:1,liveStatus:'PENDING'});
+    Object.assign(match(1),{statusShort:'FT',eventsJson:[]});await core.tick();
+    expect(tg.sendDocument).toHaveBeenCalledTimes(1);expect(sel('s1').status).toBe('COMPLETED');
+  });
+  it('does not send a historical checkpoint to a late selection or fabricate one after FT',async()=>{
+    addMatch(1);observeLive();addSel('late','u1',1,{createdAt:new Date(T0+1),selectedAt:new Date(T0+1)});
+    await makeCore().tick();expect(renderPost).not.toHaveBeenCalled();
+    Object.assign(match(1),{statusShort:'FT',eventsJson:[]});await makeCore().tick();expect(tg.sendDocument).toHaveBeenCalledTimes(1);
+    expect(String(tg.sendDocument.mock.calls[0][2])).toContain('Full Time');
+  });
+  it('shares the snapshot but preserves each user background, brand and authorization',async()=>{
+    addUser('u2');addMatch(1,{day:'2026-10-09'});addSel('s1','u1',1,{backgroundPath:'photo-a'});addSel('s2','u2',1,{backgroundPath:'photo-b'});observeLive();
+    await makeCore({pickBackground:async(s:{backgroundPath:string})=>({background_path:s.backgroundPath})}).tick();
+    expect(renderPost.mock.calls.map(c=>[c[0].page_name,c[0].background_path])).toEqual([['Page u1','photo-a'],['Page u2','photo-b']]);
+    expect(tg.sendDocument.mock.calls.map(c=>c[0])).toEqual(['101','102']);expect(football.fetchEvents).not.toHaveBeenCalled();
+  });
+  it('claims one live dispatch under concurrent ticks and recovers only pre-dispatch claims',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();const core=makeCore();await Promise.all([core.tick(),makeCore().tick()]);
+    expect(tg.sendDocument).toHaveBeenCalledTimes(1);
+    Object.assign(sel('s1'),{liveStatus:'SENDING',liveDispatchAt:null,liveUpdatedAt:new Date(T0-20*MIN)});
+    await core.recoverStuck();expect(sel('s1').liveStatus).toBe('PENDING');
+    Object.assign(sel('s1'),{liveStatus:'SENDING',liveDispatchAt:new Date(T0),liveUpdatedAt:new Date(T0-20*MIN)});
+    await core.recoverStuck();expect(sel('s1').liveStatus).toBe('UNCERTAIN');
+  });
+  it('suppresses an ambiguous live send after restart but still sends final',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();tg.sendDocument.mockRejectedValueOnce(networkError());
+    await makeCore().tick();expect(sel('s1')).toMatchObject({liveStatus:'UNCERTAIN',status:'SELECTED'});
+    await makeCore().tick();expect(tg.sendDocument).toHaveBeenCalledTimes(1);
+    Object.assign(match(1),{statusShort:'FT',eventsJson:[]});await makeCore().tick();expect(tg.sendDocument).toHaveBeenCalledTimes(2);
+  });
+  it('retries a confirmed live rejection but preserves the original observed score',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();tg.sendDocument.mockRejectedValueOnce(Object.assign(new Error('rate limited'),{telegramCode:429}));
+    const core=makeCore();await core.tick();expect(sel('s1')).toMatchObject({liveStatus:'PENDING',liveDispatchAt:null,attempts:0});
+    advance(5);observeLive(1,90,5,3,1);await core.tick();expect(tg.sendDocument).toHaveBeenCalledTimes(2);
+    expect(renderPost.mock.calls[1][0].home_score).toBe(2);expect(sel('s1').liveStatus).toBe('SENT');
+  });
+  it('does not repeat an ambiguous final send after restart',async()=>{
+    finishedWithEvents(1);addSel('s1','u1',1);tg.sendDocument.mockRejectedValueOnce(networkError());
+    await makeCore().tick();await makeCore().recoverStuck();await makeCore().tick();
+    expect(sel('s1').status).toBe('FAILED');expect(tg.sendDocument).toHaveBeenCalledTimes(1);expect(sel('s1').finalDispatchAt).toBeInstanceOf(Date);
+  });
+  it('does not repeat a successful live send when recording success fails and the worker restarts',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();db.failNext('selection','update',new Error('db unavailable'),1,a=>a.data.liveStatus==='SENT');
+    await makeCore().tick();await makeCore().tick();expect(tg.sendDocument).toHaveBeenCalledTimes(1);expect(sel('s1').status).toBe('SELECTED');
+  });
+  it('does not recover a final dispatch fence after a crash and cannot resend it',async()=>{
+    finishedWithEvents(1);addSel('s1','u1',1,{status:'SENDING',finalDispatchAt:new Date(T0-20*MIN),updatedAt:new Date(T0-20*MIN)});
+    const core=makeCore();await core.recoverStuck();await core.tick();expect(sel('s1').status).toBe('FAILED');expect(tg.sendDocument).not.toHaveBeenCalled();
+  });
+  it.each(['ET','P','BT','AET','PEN','PST','CANC'])('handles %s without misclassifying final or live',async status=>{
+    addMatch(1);addSel('s1','u1',1);observeLive(1,105,null,0,0,status);
+    if(['AET','PEN'].includes(status))match(1).eventsJson=[];
+    await makeCore().tick();const label=String(tg.sendDocument.mock.calls[0]?.[2]??'');
+    if(status==='ET')expect(label).toContain('90+ Live Checkpoint');
+    else if(['AET','PEN'].includes(status))expect(label).toContain('Full Time');
+    else expect(tg.sendDocument).not.toHaveBeenCalled();
   });
 });
 

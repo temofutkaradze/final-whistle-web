@@ -9,14 +9,29 @@ export async function toggleSelection({ prisma, userId, fixtureId, maxAgeHours, 
   if (existing) {
     if (existing.status === "COMPLETED") return { result: "already-sent" };
     // The worker is sending it right now: removing it here would break that send.
-    if (existing.status === "SENDING") return { result: "sending" };
+    if (existing.status === "SENDING" || existing.liveStatus === 'SENDING') return { result: "sending" };
+    if (existing.status === 'DESELECTED') {
+      if (match.kickoff.getTime() < now - maxAgeHours * 3600e3) return {result:'too-old'};
+      await prisma.selection.updateMany({where:{id:existing.id,status:'DESELECTED'},data:{status:'SELECTED',selectedAt:new Date(now)}});
+      return {result:'selected'};
+    }
+    // Retain delivery fences through deselection/reselection. Deleting them could send twice.
+    if (existing.liveDispatchAt || existing.finalDispatchAt || ['SENT','UNCERTAIN'].includes(existing.liveStatus)) {
+      const changed = await prisma.selection.updateMany({where:{id:existing.id,status:{in:['SELECTED','FAILED']},liveStatus:{not:'SENDING'}},data:{status:'DESELECTED'}});
+      if (!changed.count) {
+        const current = await prisma.selection.findUnique({where:{userId_fixtureId:{userId,fixtureId}}});
+        if(current?.status==='COMPLETED')return {result:'already-sent'};
+        if(current?.status==='SENDING'||current?.liveStatus==='SENDING')return {result:'sending'};
+      }
+      return {result:'removed'};
+    }
     const removed = await prisma.selection.deleteMany({
-      where: { id: existing.id, userId, fixtureId, status: { in: ["SELECTED", "FAILED"] } },
+      where: { id: existing.id, userId, fixtureId, status: { in: ["SELECTED", "FAILED"] },liveStatus:{in:['PENDING','FAILED']},liveDispatchAt:null,finalDispatchAt:null },
     });
     if (!removed.count) {
       const current = await prisma.selection.findUnique({ where: { userId_fixtureId: { userId, fixtureId } } });
       if (current?.status === "COMPLETED") return { result: "already-sent" };
-      if (current?.status === "SENDING") return { result: "sending" };
+      if (current?.status === "SENDING" || current?.liveStatus === 'SENDING') return { result: "sending" };
       if (current) return { result: "selected" }; // a replacement or another state: leave it intact
     }
     return { result: "removed" };

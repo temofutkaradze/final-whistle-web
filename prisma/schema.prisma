@@ -118,6 +118,11 @@ model Match {
   eventsJson    Json?
   finishedAt    DateTime?
   lastCheckedAt DateTime?
+  elapsedMinutes Int?
+  extraMinutes Int?
+  // First eligible scheduled status observation, immutable; never reconstructed from kickoff.
+  liveCheckpointAt DateTime?
+  liveCheckpointJson Json?
   createdAt     DateTime  @default(now())
   selections    Selection[]
 
@@ -130,11 +135,20 @@ model Selection {
   id             String    @id @default(cuid())
   userId         String
   fixtureId      Int
-  status         String    @default("SELECTED") // SELECTED, SENDING, COMPLETED, FAILED
+  status         String    @default("SELECTED") // SELECTED, SENDING, COMPLETED, FAILED, DESELECTED (retained receipts)
   backgroundPath String?
   attempts       Int       @default(0)
   lastError      String?
   sentAt         DateTime?
+  selectedAt     DateTime @default(now())
+  liveStatus     String @default("PENDING") // PENDING, SENDING, SENT, FAILED, UNCERTAIN
+  liveAttempts   Int @default(0)
+  liveUpdatedAt  DateTime?
+  liveLastError  String?
+  liveSentAt     DateTime?
+  // Durable send fences: never retry an ambiguous Telegram dispatch after a restart.
+  liveDispatchAt DateTime?
+  finalDispatchAt DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)

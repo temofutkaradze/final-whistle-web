@@ -22,7 +22,9 @@ export function makeTelegram(token) {
 
   // Sent as a document so Telegram does not compress the picture.
   async function sendDocument(chatId, filePath, caption, fileName = path.basename(filePath)) {
-    const bytes = await readFile(filePath);
+    let bytes;
+    try { bytes = await readFile(filePath); }
+    catch (e) { e.deliveryNotAttempted = true; throw e; }
     const form = new FormData();
     form.append("chat_id", String(chatId));
     if (caption) form.append("caption", caption);

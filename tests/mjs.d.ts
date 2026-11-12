@@ -35,6 +35,17 @@ declare module "*/scripts/lib/football.mjs" {
   export const isValidTimeZone: (tz: string) => boolean;
   export const isFinished: (status: string) => boolean;
   export const isDead: (status: string) => boolean;
+  export function ensureDay(date:string):Promise<void>;
+  export function refreshStatuses(date:string,matches:any[]):Promise<void>;
+}
+
+declare module "*/scripts/lib/live-checkpoint.mjs" {
+  export function isLiveCheckpoint(status:string,elapsed:unknown):boolean;
+  export function checkpointFromFixture(fixture:any,observedAt:Date):any;
+}
+declare module "*/scripts/lib/match-list.mjs" {
+  export function listAvailableMatches(deps:any):Promise<any[]>;
+  export function filterMatchList(matches:any[],filters:{leagues:Set<number>;teams:Set<number>},search?:string|null,limit?:number):any[];
 }
 
 declare module "*/scripts/lib/worker-core.mjs" {

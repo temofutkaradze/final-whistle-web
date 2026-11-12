@@ -78,6 +78,15 @@ describe("tapping a match button", () => {
 });
 
 describe('worker claim between selection lookup and deletion',()=>{
+  it('retains a live receipt through deselection/reselection and resets only selection time',async()=>{
+    await toggle();Object.assign(selections()[0],{liveStatus:'SENT',liveDispatchAt:new Date(NOW-1000)});
+    const original=selections()[0].id;
+    expect(await toggle()).toEqual({result:'removed'});expect(selections()[0].status).toBe('DESELECTED');
+    expect(await toggle()).toEqual({result:'selected'});expect(selections()[0]).toMatchObject({id:original,liveStatus:'SENT',selectedAt:new Date(NOW)});
+  });
+  it('cannot delete a selection while its live stage is being sent',async()=>{
+    await toggle();selections()[0].liveStatus='SENDING';expect(await toggle()).toEqual({result:'sending'});expect(selections()).toHaveLength(1);
+  });
   it.each(['SENDING','COMPLETED'])('keeps the row after the worker changes it to %s',async status=>{
     await toggle();
     const remove=db.prisma.selection.deleteMany;

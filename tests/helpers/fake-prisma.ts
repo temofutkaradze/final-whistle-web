@@ -40,7 +40,7 @@ export function createFakeDb(clock: { now: number }) {
       }
       const isOps = cond !== null && typeof cond === "object" && !(cond instanceof Date);
       if (!isOps) {
-        if (time(row[key]) !== time(cond)) return false;
+        if (time(row[key] ?? null) !== time(cond)) return false;
         continue;
       }
       const rel = related(model, row, key);
@@ -48,7 +48,7 @@ export function createFakeDb(clock: { now: number }) {
         if (!rel || !matches(key, rel, cond as Where)) return false;
         continue;
       }
-      const v = time(row[key]) as any;
+      const v = time(row[key] ?? null) as any;
       const c = cond as Row;
       if ("equals" in c && v !== time(c.equals)) return false;
       if ("not" in c && v === time(c.not)) return false;
@@ -130,7 +130,7 @@ export function createFakeDb(clock: { now: number }) {
           throw new FakeDbError("Unique constraint failed on (userId, fixtureId)", "P2002");
         }
         if (model === "selection" && row.id === undefined) row.id = `sel-${tables.selection.length + 1}-${clock.now}`;
-        if (model === "selection") Object.assign(row, { status: "SELECTED", attempts: 0, ...args.data });
+        if (model === "selection") Object.assign(row, { status: "SELECTED", attempts: 0, liveStatus:'PENDING',liveAttempts:0,selectedAt:new Date(clock.now), ...args.data });
         if(model==='matchPairingChallenge'){
           if(tables[model].some(x=>x.codeHash===row.codeHash||(x.userId===row.userId&&x.botId===row.botId&&x.telegramUserId===row.telegramUserId)))throw new FakeDbError('Pairing uniqueness','P2002');
           row.id ??= 'challenge-'+(++pairingSequence);
