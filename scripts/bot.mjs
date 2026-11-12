@@ -19,7 +19,8 @@ for(const signal of ["SIGINT","SIGTERM"])process.on(signal,stop);
 import { makeTelegram } from "./lib/telegram.mjs";
 import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR } from "./lib/render.mjs";
-import { ensureDay, formatKickoff, localDate } from "./lib/football.mjs";
+import { ensureDay, formatKickoff, localDayRange } from "./lib/football.mjs";
+import { listAvailableMatches, filterMatchList } from "./lib/match-list.mjs";
 import { MAX_AGE_HOURS } from "./lib/config.mjs";
 import { runPoller, shouldRestart } from "./lib/poller.mjs";
 import { toggleSelection } from "./lib/selection.mjs";
@@ -30,9 +31,9 @@ const MAX_BUTTONS = 50;
 
 const HELP =
   "How it works:\n" +
-  "1. /matches shows today's matches. Tap the ones you want a post for.\n" +
+  "1. /matches shows today's matches plus cached kickoffs from the last 4 hours. Tap the ones you want a post for.\n" +
   "2. Send a background image (best as a file, so it is not compressed).\n" +
-  "3. When a match ends, the finished post arrives here automatically.\n\n" +
+  "3. An observed live 90+ checkpoint may arrive first; the Full Time post follows automatically.\n\n" +
   "Tip: type a team name (e.g. Barcelona) to search today's matches.";
 
 const matchButton = (m, selected) => [
@@ -49,14 +50,12 @@ async function findUser(ctx, chatId) {
 }
 
 async function selectedIds(userId, fixtureIds) {
-  const rows = await prisma.selection.findMany({ where: { userId, fixtureId: { in: fixtureIds } }, select: { fixtureId: true } });
+  const rows = await prisma.selection.findMany({ where: { userId, fixtureId: { in: fixtureIds },status:{not:'DESELECTED'} }, select: { fixtureId: true } });
   return new Set(rows.map((r) => r.fixtureId));
 }
 
 async function todaysMatches() {
-  const date = localDate();
-  await ensureDay(date);
-  return prisma.match.findMany({ where: { day: date }, orderBy: [{ kickoff: "asc" }, { fixtureId: "asc" }] });
+  return listAvailableMatches({ prisma, ensureDay, localDayRange });
 }
 
 // What the customer follows: leagues and/or clubs. Nothing chosen = show every league we store.
@@ -77,11 +76,7 @@ async function sendMatchList(ctx, chatId, user, search) {
     return;
   }
   const { leagues, teams } = await userFilters(user.id);
-  if (leagues.size || teams.size) {
-    matches = matches.filter((m) => leagues.has(m.leagueId) || teams.has(m.homeTeamId) || teams.has(m.awayTeamId));
-  }
-  if (search) matches = matches.filter((m) => `${m.homeTeam} ${m.awayTeam}`.toLowerCase().includes(search));
-  matches = matches.slice(0, MAX_BUTTONS);
+  matches = filterMatchList(matches, { leagues, teams }, search, MAX_BUTTONS);
 
   if (!matches.length) {
     await tg.sendMessage(

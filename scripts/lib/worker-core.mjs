@@ -1,12 +1,13 @@
 import {approvedMatchUser} from './match-pairing.mjs';
 import {deleteUnusedBackground} from './background-files.mjs';
 import {realpath,lstat} from 'node:fs/promises';
+import {isLiveCheckpoint} from './live-checkpoint.mjs';
 // The brain of the worker (scripts/worker.mjs): finds finished matches, builds the post for every customer who picked the
 // match and sends it to their approved Telegram chat. Its external dependencies (database,
 // match data, render server, Telegram, the clock) is handed in, so tests can replace all of it.
 //
 // Rules (same as the n8n workflow it replaced):
-//   - wait 110 min after kickoff, give up after 24 h
+//   - wait 107 min after kickoff, give up after 24 h
 //   - status check = 1 request per day list; events = 1 request per finished match; the result is shared by all customers
 //   - old matches are deleted from our database after 48 h
 //
@@ -87,7 +88,8 @@ export function createWorkerCore(deps) {
   const { isFinished, isDead } = football;
   const EMPTY_EVENTS_TRIES = deps.emptyEventsTries ?? 3;
 
-  const statusBackoff = createBackoff({ baseMs: minutes(config.CHECK_INTERVAL_MIN), maxMs: minutes(60) });
+  // Normal checks may run every minute; API failures retain the existing 10-minute initial backoff.
+  const statusBackoff = createBackoff({ baseMs: minutes(Math.max(10, config.CHECK_INTERVAL_MIN)), maxMs: minutes(60) });
   const eventsBackoff = createBackoff({ baseMs: minutes(5), maxMs: minutes(30) });
   const sendBackoff = createBackoff({ baseMs: minutes(1), maxMs: minutes(10) });
   const emptyEvents = new Map(); // fixtureId -> how many times the events came back empty
@@ -113,13 +115,13 @@ export function createWorkerCore(deps) {
     return t ? { template: "classic", template_html: t.html } : { template: "classic" };
   }
 
-  async function sendOne(sel, match, eventsHtml) {
+  async function sendOne(sel, match, eventsHtml, stage = 'final') {
     assertActive();
     const scope={botId:sel.user.botId,connectionToken:sel.user.botToken,identity:{chatId:sel.user.telegramChatId,telegramUserId:sel.user.telegramChatId}};
     if(!await approvedMatchUser(prisma,sel.user.id,scope))throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
     const brand = sel.user.brands[0];
     const jpg = await renderPost({
-      fixture_id: `${match.fixtureId}_${sel.id}`, // unique per customer, so files never collide
+      fixture_id: `${match.fixtureId}_${sel.id}${stage === 'live' ? '_live' : ''}`, // keep final paths stable; live cannot overwrite them
       ...(await brandLookFields(brand)),
       ...(await customTemplateFields(brand)),
       ...(await pickBackground(sel, brand)),
@@ -136,7 +138,28 @@ export function createWorkerCore(deps) {
     assertActive();
     const approved=await approvedMatchUser(prisma,sel.user.id,scope);
     if(!approved)throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
-    await telegramForUser(approved).sendDocument(approved.telegramChatId, jpg, `${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+    const telegram = telegramForUser(approved);
+    const live = stage === 'live';
+    const field = live ? 'liveDispatchAt' : 'finalDispatchAt';
+    // Persist BEFORE external delivery. Telegram has no idempotency key: a timeout or crash after
+    // dispatch is ambiguous, so recovery must not blindly send again.
+    const fenced = await prisma.selection.updateMany({ where: { id: sel.id,
+      status: live ? 'SELECTED' : 'SENDING', ...(live ? {liveStatus:'SENDING'} : {}), [field]: null },
+      data: { [field]: new Date(now()) } });
+    if (!fenced.count) throw Object.assign(new Error('Delivery claim lost'), {code:'DELIVERY_CLAIM_LOST'});
+    assertActive();
+    const label = live ? `90+ Live Checkpoint (${match.elapsed}${match.extra ? '+'+match.extra : ''} min)` : 'Full Time';
+    try {
+      await telegram.sendDocument(approved.telegramChatId, jpg, `${label} — ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+    } catch (e) {
+      // Only an explicit Telegram rejection proves the document was not accepted.
+      if (e.deliveryNotAttempted || Number.isInteger(e.telegramCode) || /^Telegram sendDocument failed: (?:Forbidden|Bad Request|Too Many Requests)/i.test(e.message)) {
+        await prisma.selection.update({where:{id:sel.id},data:{[field]:null}});
+      } else {
+        e.deliveryUncertain = true;
+      }
+      throw e;
+    }
   }
 
   // The post is out; record it. A few quick retries, because a sleeping database often answers the second time.
@@ -283,6 +306,11 @@ export function createWorkerCore(deps) {
       } catch (e) {
         if (!isActive()) throw e;
         if (delivered) continue; // cannot happen (markCompleted does not throw); kept so a post is never repeated
+        if(e.code === 'DELIVERY_CLAIM_LOST') continue;
+        if(e.deliveryUncertain){
+          await prisma.selection.update({where:{id:sel.id},data:{status:'FAILED',lastError:'Telegram final delivery unconfirmed; automatic resend suppressed.'}});
+          continue;
+        }
         if(e?.code==='MATCH_PAIRING_REQUIRED'){
           await prisma.selection.update({where:{id:sel.id},data:{status:'SELECTED'}});continue;
         }
@@ -303,6 +331,37 @@ export function createWorkerCore(deps) {
         });
         if (failed) await notify(sel.user, `Sorry, the post for ${match.homeTeam} - ${match.awayTeam} could not be created.`);
       } finally { activeClaims.delete(sel.id); }
+    }
+
+    // Final deliveries above always take priority. Live uses only the frozen first scheduled
+    // observation and never requests events or changes the selection's final-processing status.
+    for (const sel of sels) {
+      const match = matchById.get(sel.fixtureId);
+      const shot = match?.liveCheckpointJson;
+      if (!match || !isLiveCheckpoint(match.statusShort, match.elapsedMinutes) || !shot ||
+          !isLiveCheckpoint(shot.statusShort, shot.elapsed) ||
+          !Number.isInteger(shot.homeScore) || shot.homeScore < 0 || !Number.isInteger(shot.awayScore) || shot.awayScore < 0 ||
+          !match.liveCheckpointAt || (sel.selectedAt ?? sel.createdAt) > match.liveCheckpointAt ||
+          !['PENDING',undefined].includes(sel.liveStatus) || sel.liveDispatchAt) continue;
+      if (sel.liveUpdatedAt && t - sel.liveUpdatedAt.getTime() < minutes(config.RETRY_DELAY_MIN)) continue;
+      const claimed = await prisma.selection.updateMany({where:{id:sel.id,status:'SELECTED',liveStatus:'PENDING',liveDispatchAt:null},
+        data:{liveStatus:'SENDING',liveUpdatedAt:new Date(t)}});
+      if (!claimed.count) continue;
+      try {
+        await sendOne(sel, {...match,...shot}, {home_events_html:'',away_events_html:'',total_events:0}, 'live');
+        await prisma.selection.update({where:{id:sel.id},data:{liveStatus:'SENT',liveSentAt:new Date(now()),liveLastError:null}});
+      } catch(e) {
+        if (!isActive()) throw e;
+        if (e.code === 'DELIVERY_CLAIM_LOST') continue;
+        // A persisted fence also covers successful delivery followed by a failed SENT write.
+        const current = await prisma.selection.findUnique({where:{id:sel.id}});
+        if (!current) continue;
+        const attempts = (sel.liveAttempts ?? 0) + (classifyError(e) === 'transient' || e.code === 'MATCH_PAIRING_REQUIRED' ? 0 : 1);
+        await prisma.selection.update({where:{id:sel.id},data:{
+          liveStatus:current.liveDispatchAt ? 'UNCERTAIN' : attempts >= config.MAX_ATTEMPTS ? 'FAILED' : 'PENDING',
+          liveAttempts:attempts,liveUpdatedAt:new Date(t),liveLastError:current.liveDispatchAt ? 'Telegram live delivery unconfirmed; automatic resend suppressed.' : String(e.message).slice(0,500),
+        }});
+      }
     }
   }
 
@@ -330,8 +389,12 @@ export function createWorkerCore(deps) {
   // Recover only stale SENDING rows, including at startup. Never recover a current or known-delivered claim.
   async function recoverStuck({ all = false } = {}) {
     assertActive();
-    const where = { status: "SENDING", updatedAt: { lt: new Date(now() - minutes(15)) }, id: { notIn: [...deliveredButUnsaved.keys(),...activeClaims] } };
+    const where = { status: "SENDING", finalDispatchAt:null, updatedAt: { lt: new Date(now() - minutes(15)) }, id: { notIn: [...deliveredButUnsaved.keys(),...activeClaims] } };
     const r = await prisma.selection.updateMany({ where, data: { status: "SELECTED" } });
+    // Crashes before dispatch can retry. Crashes after dispatch require manual reconciliation.
+    await prisma.selection.updateMany({where:{liveStatus:'SENDING',liveDispatchAt:null,liveUpdatedAt:{lt:new Date(now()-minutes(15))}},data:{liveStatus:'PENDING'}});
+    await prisma.selection.updateMany({where:{liveStatus:'SENDING',liveDispatchAt:{not:null},liveUpdatedAt:{lt:new Date(now()-minutes(15))}},data:{liveStatus:'UNCERTAIN',liveLastError:'Dispatch interrupted; automatic resend suppressed.'}});
+    await prisma.selection.updateMany({where:{status:'SENDING',finalDispatchAt:{not:null},updatedAt:{lt:new Date(now()-minutes(15))},id:{notIn:[...deliveredButUnsaved.keys(),...activeClaims]}},data:{status:'FAILED',lastError:'Dispatch interrupted; automatic resend suppressed.'}});
     if (r.count) log(`[recovered] ${r.count} posts put back in the queue`);
     return r.count;
   }

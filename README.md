@@ -33,10 +33,12 @@ Run in separate terminals (plus the render server, see below):
 
 (`start-system.bat` opens all of them, plus the site, in one Windows Terminal window.)
 
-Flow: `/matches` in Telegram -> tap matches -> send a background image -> when the match
-ends (110 min after kickoff) the finished post arrives. API-Football is asked once per match;
-all customers share the result. Matches older than 48 h are deleted. The API counter stops at
-90 requests/day (`DAILY_API_LIMIT`).
+Flow: `/matches` in Telegram -> tap matches -> send a background image -> an observed live
+90+ checkpoint may arrive first, followed by the final post after full time. Status checks
+start 107 elapsed minutes after kickoff, then at most every minute per fixture; day-list
+requests and final events are shared across customers. One-minute checking can consume the
+daily quota substantially faster; it does not guarantee a live checkpoint. Matches older than
+48 h are deleted. The API counter still stops at 90 requests/day (`DAILY_API_LIMIT`).
 
 ## Each customer has their own bot
 

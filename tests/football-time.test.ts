@@ -93,8 +93,8 @@ describe("match status and settings", () => {
 
   it("keeps the free-plan protections (100 requests a day, check rhythm)", () => {
     expect(config.DAILY_API_LIMIT).toBeLessThan(100);
-    expect(config.DELAY_MINUTES).toBeGreaterThanOrEqual(90); // never ask before the match can be over
-    expect(config.CHECK_INTERVAL_MIN).toBeGreaterThanOrEqual(5);
+    expect(config.DELAY_MINUTES).toBe(107);
+    expect(config.CHECK_INTERVAL_MIN).toBe(1);
     expect(config.MAX_AGE_HOURS * 60).toBeGreaterThan(config.DELAY_MINUTES);
     expect(config.CLEANUP_AFTER_HOURS).toBeGreaterThan(config.MAX_AGE_HOURS);
     expect(config.MAX_ATTEMPTS).toBeGreaterThanOrEqual(1);

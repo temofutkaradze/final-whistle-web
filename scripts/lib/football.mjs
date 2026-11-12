@@ -3,6 +3,7 @@
 
 import { prisma } from "./db.mjs";
 import { DAILY_API_LIMIT, DEAD, FAVORITE_LEAGUES, FINISHED, TZ } from "./config.mjs";
+import { checkpointFromFixture } from './live-checkpoint.mjs';
 
 const BASE = "https://v3.football.api-sports.io";
 
@@ -174,8 +175,18 @@ export async function refreshStatuses(date, trackedMatches) {
       data.statusShort = f.fixture.status.short;
       data.homeScore = f.goals.home;
       data.awayScore = f.goals.away;
+      data.elapsedMinutes = Number.isInteger(f.fixture.status.elapsed) ? f.fixture.status.elapsed : null;
+      data.extraMinutes = Number.isInteger(f.fixture.status.extra) ? f.fixture.status.extra : null;
     }
-    await prisma.match.update({ where: { fixtureId: m.fixtureId }, data });
+    const checkpoint = f && checkpointFromFixture(f, now);
+    // Do not advance the cached check time without persisting its first eligible observation.
+    await prisma.$transaction(async tx => {
+      await tx.match.update({ where: { fixtureId: m.fixtureId }, data });
+      if (checkpoint) await tx.match.updateMany({
+        where: { fixtureId: m.fixtureId, liveCheckpointAt: null },
+        data: { liveCheckpointAt: now, liveCheckpointJson: checkpoint },
+      });
+    });
   }
 }
 
