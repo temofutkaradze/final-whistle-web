@@ -19,7 +19,7 @@ function fixture(linked = true) {
   })};
   const config={...DEFAULT_NEWS_STYLE,accent:'#123456',textSize:80};
   const tg={sendMessage:vi.fn(async()=>({ok:true})),sendDocument:vi.fn(async()=>{})};
-  const render=vi.fn(async()=>'/fake/news.jpg');
+  const render=vi.fn(async(..._args:unknown[])=>'/fake/news.jpg');
   const diagnostic=vi.fn();
   const handle=createNewsHandler({prisma:{newsSettings:table,newsTemplate:{findFirst:vi.fn(async()=>({config}))}},tg,ownerId:'owner',connectionToken:settings.botToken,download:vi.fn(async()=>Buffer.from('image')),render,cleanup:vi.fn(async()=>{}),now:()=>now,onDiagnostic:diagnostic});
   const update=(id:number,message:Record<string,unknown>,chat=42)=>({update_id:id,message:{chat:{id:chat,type:'private'},from:{id:chat},...message}});
@@ -51,6 +51,15 @@ describe('News original conversation',()=>{
 });
 
 describe('News bot integration with mocked Telegram and persistence',()=>{
+  for(const label of ['Headline + Subtitle','Large Headline','NEWS (Red)','DID YOU KNOW (Yellow)'])it('adds '+label+' without replacing the legacy conversation',async()=>{
+    const f=fixture();await f.handle(f.update(1,{document:{file_id:'full-quality-background',file_name:'photo.webp',mime_type:'application/octet-stream'}}));
+    expect(f.tg.sendMessage.mock.calls[0]).toMatchObject(['42',expect.any(String),{reply_markup:{keyboard:expect.arrayContaining([[{text:label}]]),resize_keyboard:true,one_time_keyboard:true}}]);
+    await f.handle(f.update(2,{text:label}));expect(f.settings.pending.step).toBe('headline');
+    await f.handle(f.update(3,{text:'THE *NEXT\nCHAPTER*'}));
+    if(label==='Headline + Subtitle'){expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(4,{text:'An editable *subtitle*'}));}
+    expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0][0]).toMatchObject({layout:'single',quote:'THE *NEXT\nCHAPTER*',editorial:{headline:'THE *NEXT\nCHAPTER*',subtitle:label==='Headline + Subtitle'?'An editable *subtitle*':''}});
+    expect(f.tg.sendDocument).toHaveBeenCalledOnce();expect(f.settings.pending.stage).toBe('delivered');
+  });
   it('renders once, applies saved styling, sends a JPG document, and needs no /start per post',async()=>{
     const f=fixture();await f.handle(f.update(1,photo));
     const text=f.update(2,{text:'Author | News'});await f.handle(text);await f.handle(text);

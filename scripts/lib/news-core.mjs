@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { DEFAULT_NEWS_STYLE, HELP } from '../../src/lib/news/parse.ts';
 import { originalNewsTransition } from '../../src/lib/news/conversation.ts';
+import {editorialTransition,EDITORIAL_KEYBOARD} from '../../src/lib/news/editorial.ts';
+import {newsImageFileId} from '../../src/lib/news/conversation.ts';
 
 export const NEWS_HELP = HELP+'\n\nStandings: send a photo caption such as Premier League 15 16 17 18, or /standings to collect messages.\n'+UCL_ROW_HELP;
 export const builtinNewsTemplates = ['single','left','right','breaking'].map(id=>({id,layout:id,config:DEFAULT_NEWS_STYLE,name:({single:'Single',left:'Circle Left',right:'Circle Right',breaking:'BREAKING'})[id]}));
@@ -22,8 +24,8 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
     if(!msg||msg.chat?.type!=='private')return;
     const chatId=String(msg.chat.id);
     if(String(msg.from?.id??'')!==chatId)return;
-    const reply=async text=>{
-      const response=await tg.sendMessage(chatId,text);
+    const reply=async (text,extra)=>{
+      const response=await tg.sendMessage(chatId,text,...(extra?[extra]:[]));
       if(response?.ok===false)throw new Error('TELEGRAM_REPLY_FAILED');
     };
     const start=(msg.text??'').trim().match(/^\/start(?:@\w+)?(?:\s+(\S+))?$/i);
@@ -48,7 +50,7 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
         const template=await prisma.newsTemplate.findFirst({where:{id:settings.defaultTemplateRef,userId:ownerId},select:{config:true}});
         config=template?.config;
       }
-      let transition=standingsTransition(msg,raw,now())??originalNewsTransition(msg,pending,now(),config);
+      let transition=editorialTransition(msg,raw,now())??standingsTransition(msg,raw,now())??originalNewsTransition(msg,pending,now(),config);
       if('request' in transition){
         // Resolve before downloading; disabled sources never process the user's photo.
         try{transition={pending:null,background:transition.background,circle:null,job:await standings(transition.request.leagueId,transition.request.positions)};}
@@ -66,7 +68,9 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       const state='job' in transition?{stage:'rendering',requestId:update.update_id}:transition.pending??{};
       const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:state}});
       if(!saved.count||!isActive())return;
-      if('reply' in transition){phase='reply';await reply(transition.reply);return;}
+      if('reply' in transition){phase='reply';
+        const choose=transition.pending?.background&&!transition.pending?.circle&&!transition.pending?.stage&&!transition.pending?.kind&&newsImageFileId(msg);
+        await reply(choose?transition.reply+'\n\nOr choose a new headline template below. You can still send a circle photo or the original Author | quote text.':transition.reply,choose?EDITORIAL_KEYBOARD:raw?.stage==='editorial'?{reply_markup:{remove_keyboard:true}}:undefined);return;}
       // As in n8n, consume images BEFORE downloads/render. A second text message
       // consequently asks for a new background rather than regenerating this job.
       phase='download';

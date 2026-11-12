@@ -5,6 +5,7 @@
 import type { Job } from './parse';
 import { DEFAULT_NEWS_STYLE, normalizeNewsStyle } from './parse.ts';
 import { readFileSync } from 'node:fs';
+import {buildEditorialHtml} from './editorial-html.ts';
 
 export const bundledFonts = ([['League Gothic','leaguegothic',400],['Anton','anton',400],['Montserrat','montserrat',800]] as const)
   .map(([family,file,weight]) => `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};src:url(data:font/ttf;base64,${readFileSync(new URL(`../../../render/fonts/${file}.ttf`,import.meta.url)).toString('base64')}) format('truetype');}`)
@@ -17,6 +18,7 @@ const sniff = (b: Buffer) => (b[0] === 0x89 && b[1] === 0x50 ? 'image/png' : b[0
 const dataUri = (b: Buffer) => `data:${sniff(b)};base64,${b.toString('base64')}`;
 
 export function buildHtml(job: Job, bgBuf: Buffer, circleBuf: Buffer | null): string {
+  if(job.editorial)return buildEditorialHtml(job,dataUri(bgBuf),bundledFonts);
   const style = normalizeNewsStyle(job.style);
   const bgSrc = dataUri(bgBuf);
   const meta = {
