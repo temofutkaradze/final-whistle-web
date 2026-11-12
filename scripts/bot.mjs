@@ -18,7 +18,8 @@ const stop=()=>{stopping=true;for(const entry of running.values())entry.stop=tru
 for(const signal of ["SIGINT","SIGTERM"])process.on(signal,stop);
 import { makeTelegram } from "./lib/telegram.mjs";
 import { decryptSecret } from "./lib/crypto.mjs";
-import { BACKGROUND_DIR } from "./lib/render.mjs";
+import { BACKGROUND_DIR, renderPost, brandLookFields } from "./lib/render.mjs";
+import {regenerateAssignedMatches} from './lib/manual-match-post.mjs';
 import { ensureDay, formatKickoff, localDayRange } from "./lib/football.mjs";
 import { listAvailableMatches, filterMatchList } from "./lib/match-list.mjs";
 import { MAX_AGE_HOURS } from "./lib/config.mjs";
@@ -183,6 +184,13 @@ async function handleCallback(ctx, cb) {
       message_id: cb.message.message_id,
       text: res.count ? `Background saved for ${res.count} match(es). ✅` : "No matching selection.",
     });
+    if(res.count){
+      const result=await regenerateAssignedMatches({prisma,userId:user.id,backgroundPath:path,fixtureId:arg==='all'?'all':Number(arg),
+        scope:{botId:ctx.botId,connectionToken:ctx.connectionToken,identity:{chatId,telegramUserId:chatId}},tg,renderPost,brandLookFields,
+        isActive:()=>!stopping&&Boolean(managerLock?.active())});
+      if(result.unavailable)await tg.sendMessage(chatId,'Background saved. A result image cannot be generated until the selected match has a recorded score.');
+      if(result.failed)await tg.sendMessage(chatId,'Background saved, but the new image could not be delivered. Upload another photo to try again.');
+    }
     return;
   }
 

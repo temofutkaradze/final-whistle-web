@@ -1,4 +1,7 @@
 // Types for the plain .mjs files of the bot and the worker, so the tests can import them with full type checking.
+declare module "*/scripts/lib/manual-match-post.mjs" {
+ export function regenerateAssignedMatches(deps:any):Promise<{sent:number;unavailable:number;failed:number}>;
+}
 
 declare module "*/scripts/lib/events.mjs" {
   export function buildEventsHtml(
