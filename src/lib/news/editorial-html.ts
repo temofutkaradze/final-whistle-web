@@ -24,7 +24,7 @@ ${fonts}
 .label-row{position:absolute;left:-2px;right:-2px;top:0;transform:translateY(-50%);display:flex;align-items:center;gap:22px}
 .label-row::before,.label-row::after{content:'';flex:1;height:2px;background:${color}}
 .label{flex:none;color:${color};font:400 ${design.template==='news-red'?70:54}px/1 Anton,'League Gothic',sans-serif;letter-spacing:${design.template==='news-red'?12:0}px}
-.frame #headline{font-size:68px;line-height:1.04}
+.frame #headline{font-size:68px;line-height:1.04;text-align:center}
 </style></head><body><div class="post"><img id="background" src="${background}"><div class="shade"></div>
 ${framed?`<div class="frame"><div class="label-row"><span class="label">${label}</span></div><div id="headline">${highlighted(design.headline)}</div></div>`:`<div class="copy"><div id="headline">${highlighted(design.headline)}</div>${subtitle?`<div id="subtitle">${highlighted(design.subtitle)}</div>`:''}</div>`}
 </div><script>
