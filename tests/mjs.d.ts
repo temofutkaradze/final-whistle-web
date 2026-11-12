@@ -100,6 +100,7 @@ declare module "*/scripts/lib/background-files.mjs" {
 }
 
 declare module "*/scripts/lib/telegram.mjs" {
+ export function matchImageUpload(message:any):{fileId:string;extension:string};
  export const MAX_TELEGRAM_IMAGE:number;
  export function readTelegramImage(response:Response,limit?:number):Promise<Buffer>;
  export function makeTelegram(token:string):any;

@@ -4,6 +4,24 @@ import path from "node:path";
 
 import { decryptSecret } from "./crypto.mjs";
 
+// Telegram documents may omit MIME or use application/octet-stream for ordinary JPEGs.
+export function matchImageUpload(message) {
+  if(message.document){
+    const doc=message.document;
+    const suffix=path.extname(doc.file_name??'').toLowerCase();
+    const mime=String(doc.mime_type??'').split(';')[0].trim().toLowerCase();
+    const extension=['.jpg','.jpeg','.png','.webp'].includes(suffix)?suffix:
+      ({'image/jpeg':'.jpg','image/jpg':'.jpg','image/png':'.png','image/webp':'.webp'})[mime];
+    if(!extension)throw new Error('Unsupported file. Please send a JPEG, JPG, PNG or WebP image as a Photo or File/Document.');
+    if(doc.file_size>MAX_TELEGRAM_IMAGE)throw new Error('Image is larger than 15 MB.');
+    if(!doc.file_id)throw new Error('Could not read this document. Please upload the image again.');
+    return {fileId:doc.file_id,extension};
+  }
+  const photo=message.photo?.at(-1);
+  if(!photo?.file_id)throw new Error('Could not read this photo. Please upload it again.');
+  return {fileId:photo.file_id,extension:'.jpg'};
+}
+
 // Everything the scripts need from Telegram, for ONE bot token.
 export function makeTelegram(token) {
   // Every request has a time limit: without one, a network that drops silently leaves a bot waiting forever.
@@ -35,12 +53,13 @@ export function makeTelegram(token) {
   }
 
   // Downloads a Telegram file (photo/document) into destDir and returns the full path.
-  async function downloadTelegramFile(fileId, destDir, baseName) {
+  async function downloadTelegramFile(fileId, destDir, baseName, {imageExtension} = {}) {
     const info = await api("getFile", { file_id: fileId });
     if (!info.ok) throw Object.assign(new Error(info.description ?? "getFile failed"), { telegramCode: info.error_code });
     if(info.result.file_size > MAX_TELEGRAM_IMAGE)throw new Error('Image is larger than 15 MB.');
     const filePath = info.result.file_path;
-    const ext = (path.extname(filePath) || ".jpg").toLowerCase();
+    let ext = (path.extname(filePath) || imageExtension || ".jpg").toLowerCase();
+    if(!['.jpg','.jpeg','.png','.webp'].includes(ext)&&['.jpg','.jpeg','.png','.webp'].includes(imageExtension))ext=imageExtension;
     if (![".jpg", ".jpeg", ".png", ".webp"].includes(ext)) throw new Error("Please send a JPG, PNG or WebP image.");
 
     const res = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`, { signal: AbortSignal.timeout(60_000) });

@@ -16,7 +16,7 @@ import {updateCursor} from "./lib/update-cursor.mjs";
 let stopping=false,managerLock;
 const stop=()=>{stopping=true;for(const entry of running.values())entry.stop=true;};
 for(const signal of ["SIGINT","SIGTERM"])process.on(signal,stop);
-import { makeTelegram } from "./lib/telegram.mjs";
+import { makeTelegram, matchImageUpload } from "./lib/telegram.mjs";
 import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR, renderPost, brandLookFields } from "./lib/render.mjs";
 import {regenerateAssignedMatches} from './lib/manual-match-post.mjs';
@@ -103,10 +103,9 @@ async function handleUpload(ctx, msg, chatId) {
   const user = await findUser(ctx, chatId);
   if (!user) return handleStart(ctx, chatId);
 
-  let fileId = null;
-  if (msg.document?.mime_type?.startsWith("image/")) fileId = msg.document.file_id;
-  else if (msg.photo?.length) fileId = msg.photo[msg.photo.length - 1].file_id;
-  if (!fileId) return;
+  let upload;
+  try{upload=matchImageUpload(msg);}
+  catch(e){await tg.sendMessage(chatId,e.message);return;}
 
   const open = await prisma.selection.findMany({
     where: {
@@ -123,7 +122,7 @@ async function handleUpload(ctx, msg, chatId) {
 
   let file;
   try {
-    file = await tg.downloadTelegramFile(fileId, BACKGROUND_DIR, `${user.id}_${Date.now()}`);
+    file = await tg.downloadTelegramFile(upload.fileId, BACKGROUND_DIR, `${user.id}_${Date.now()}`, {imageExtension:upload.extension});
   } catch (e) {
     await tg.sendMessage(chatId, `Could not use that image: ${e.message}`);
     return;
