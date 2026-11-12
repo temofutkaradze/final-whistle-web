@@ -14,7 +14,7 @@ export const TZ = process.env.DISPLAY_TZ || "Asia/Tbilisi";
 
 export const DELAY_MINUTES = 107; // wait this long after kickoff before the first check
 export const MAX_AGE_HOURS = 24; // give up on a match this long after kickoff
-export const CHECK_INTERVAL_MIN = 10; // ask the API about a match at most this often
+export const CHECK_INTERVAL_MIN = 1; // ask the API about a match at most this often
 export const CLEANUP_AFTER_HOURS = 48; // matches older than this are deleted from our DB
 export const DAILY_API_LIMIT = Number(process.env.DAILY_API_LIMIT || 90); // free plan = 100/day
 

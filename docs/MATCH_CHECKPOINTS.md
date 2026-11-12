@@ -16,23 +16,23 @@ local-day fixture remains visible after four hours while an older previous-day f
 does not leak through a UTC/local date mismatch.
 
 The worker still ticks once per minute, starts checking at 107 elapsed wall-clock
-minutes, checks at most every ten minutes and expires selections after 24 hours.
+minutes, checks at most every minute and expires selections after 24 hours.
 Only its existing status response can record the first live checkpoint: `2H` or `ET`,
 actual playing minute >=90 and two valid scores. HT, BT, P, generic LIVE without a
 phase, and terminal statuses are ineligible. Extra time is live; FT/AET/PEN remain
 final exactly as before. The snapshot is frozen; a later selection never replays it.
 No photo at exactly 90:00 is guaranteed. FT on the first check produces only the final.
 
-The start moved from 110 to 107 minutes; the ten-minute interval, per-UTC-day request
-batching, retry backoff and daily API cap are unchanged. This shifts normal checks from
-110/120/130... to 107/117/127... (subject to worker ticks and cached check times).
-It can increase status-request usage: a single fixture becoming FT at elapsed minute
-119 takes two checks under the old schedule, versus three under the new one. A fixture
-becoming FT at minute 116 takes two under either schedule. These examples assume an
-isolated fixture with no failures/backoff. Multiple fixtures share day-list requests,
-so actual aggregate usage depends on kickoff timing and batching; unchanged total API
-usage is no longer guaranteed. No new polling loop, live-event request or event-fetch
-policy is introduced, but the existing daily quota may be consumed sooner. At 107
+The start is 107 minutes and normal status checks now run every minute: 107/108/109...
+(subject to worker ticks and cached check times). Per-UTC-day batching and the daily cap
+remain unchanged. API failures retain the existing 10/20/40/60-minute backoff; one-minute
+normal checking does not make failed requests retry every minute.
+A single isolated fixture becoming FT at elapsed minute 119 now takes 13 status checks,
+versus two under the original 110/10 schedule or three under 107/10. With one active UTC
+day this can use approximately 60 status requests per hour, versus approximately six
+with ten-minute checking. Other API calls consume the same daily quota. Multiple UTC
+days can require separate requests; batching and errors affect actual usage. No new
+polling loop, live-event request or event-fetch policy is introduced. At 107
 elapsed minutes, actual playing time can still be below 90: wait for the next scheduled
 check rather than fabricating a checkpoint.
 
@@ -113,7 +113,7 @@ No live database credentials, Football API calls or real Telegram sends were use
    one Match manager (`npm.cmd run bot`) and one Match worker (`npm.cmd run worker`) with
    existing credentials/configuration. Existing renderer protocol/templates are unchanged.
    Do not restart unrelated News, website or renderer services as part of this feature.
-8. Monitor startup/schema/lock errors and the 107/10-minute schedule. With
+8. Monitor startup/schema/lock errors and the 107/1-minute schedule and quota usage. With
    separate messaging approval, verify one selected match's live/final documents and
    captions, user-specific branding/background, and restart deduplication. FT on the first
    check must yield only final. Never issue extra API requests to force a checkpoint.

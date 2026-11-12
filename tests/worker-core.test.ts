@@ -170,7 +170,7 @@ describe("worker: the normal path", () => {
     expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
   });
 
-  it("looks at a running match every 10 minutes, one request per day list", async () => {
+  it("looks at a running match every minute, one request per day list", async () => {
     addMatch(1, { statusShort: "2H" });
     addMatch(2, { statusShort: "2H" });
     addSel("s1", "u1", 1);
@@ -179,10 +179,10 @@ describe("worker: the normal path", () => {
     await core.tick();
     expect(football.refreshStatuses).toHaveBeenCalledTimes(1); // both matches, one list
     expect((football.refreshStatuses.mock.calls[0][1] as unknown[]).length).toBe(2);
-    advance(5);
+    advance(0.5);
     await core.tick();
     expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
-    advance(6);
+    advance(0.5);
     await core.tick();
     expect(football.refreshStatuses).toHaveBeenCalledTimes(2);
   });
@@ -593,11 +593,11 @@ describe('reference-safe match retention',()=>{
 
 describe('initial-delay request-count impact',()=>{
   it.each([
-    [109,[110],[107,117]],
-    [116,[110,120],[107,117]],
-    [119,[110,120],[107,117,127]],
-  ])('compares 110 vs 107 for full time at elapsed %s without changing final event calls',async(finish,oldChecks,newChecks)=>{
-    const simulate=async(delay:number)=>{
+    [109,[110],Array.from({length:3},(_,i)=>107+i)],
+    [116,[110,120],Array.from({length:10},(_,i)=>107+i)],
+    [119,[110,120],Array.from({length:13},(_,i)=>107+i)],
+  ])('compares original 110/10 vs 107/1 for full time at elapsed %s without changing final event calls',async(finish,oldChecks,newChecks)=>{
+    const simulate=async(delay:number,interval:number)=>{
       clock={now:T0};db=createFakeDb(clock);addUser('u1');
       addMatch(1,{kickoff:new Date(T0),statusShort:'2H'});addSel('s1','u1',1);
       apiEvents[1]=[];renderPost.mockClear();tg.sendDocument.mockClear();football.fetchEvents.mockClear();
@@ -607,16 +607,16 @@ describe('initial-delay request-count impact',()=>{
         if(elapsedWall>=finish)Object.assign(match(1),{statusShort:'FT',homeScore:0,awayScore:0,lastCheckedAt:new Date(clock.now)});
         else observeLive(1,elapsedWall<110?88:90,null,0,0);
       });
-      const core=makeCore({config:{...config,DELAY_MINUTES:delay}});
+      const core=makeCore({config:{...config,DELAY_MINUTES:delay,CHECK_INTERVAL_MIN:interval}});
       for(let minute=0;minute<=140;minute++){clock.now=T0+minute*MIN;await core.tick();}
       expect(sel('s1').status).toBe('COMPLETED');expect(football.fetchEvents).toHaveBeenCalledTimes(1);
       expect(tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('Full Time'))).toHaveLength(1);
       expect(tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('90+ Live Checkpoint')).length).toBeLessThanOrEqual(1);
-      expect(checks.every((value,i)=>i===0||value-checks[i-1]>=10)).toBe(true);
+      expect(checks.every((value,i)=>i===0||value-checks[i-1]>=interval)).toBe(true);
       return checks;
     };
-    expect(await simulate(110)).toEqual(oldChecks);
-    expect(await simulate(107)).toEqual(newChecks);
+    expect(await simulate(110,10)).toEqual(oldChecks);
+    expect(await simulate(107,1)).toEqual(newChecks);
   });
 });
 
@@ -648,8 +648,8 @@ describe('live checkpoint and independent final delivery',()=>{
     advance(1);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
     expect(football.fetchEvents).not.toHaveBeenCalled();expect(sel('s1').status).toBe('SELECTED');
     if(sends){expect(renderPost.mock.calls[0][0]).toMatchObject({fixture_id:'1_s1_live',home_score:2,away_score:1,total_events:0,home_events_html:'',away_events_html:''});expect(String(tg.sendDocument.mock.calls[0][2])).toContain('90+ Live Checkpoint');}
-    advance(9);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
-    advance(1);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
+    advance(0.5);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
+    advance(0.5);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
   });
   it.each([1,2])('sends final independently, including equal scores (away=%s), without extra API requests',async away=>{
     addMatch(1);addSel('s1','u1',1);football.refreshStatuses.mockImplementation(async()=>observeLive());

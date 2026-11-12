@@ -88,7 +88,8 @@ export function createWorkerCore(deps) {
   const { isFinished, isDead } = football;
   const EMPTY_EVENTS_TRIES = deps.emptyEventsTries ?? 3;
 
-  const statusBackoff = createBackoff({ baseMs: minutes(config.CHECK_INTERVAL_MIN), maxMs: minutes(60) });
+  // Normal checks may run every minute; API failures retain the existing 10-minute initial backoff.
+  const statusBackoff = createBackoff({ baseMs: minutes(Math.max(10, config.CHECK_INTERVAL_MIN)), maxMs: minutes(60) });
   const eventsBackoff = createBackoff({ baseMs: minutes(5), maxMs: minutes(30) });
   const sendBackoff = createBackoff({ baseMs: minutes(1), maxMs: minutes(10) });
   const emptyEvents = new Map(); // fixtureId -> how many times the events came back empty
