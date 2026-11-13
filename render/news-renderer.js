@@ -129,19 +129,21 @@ module.exports = function createNewsRenderer({
         throw new Error("Unexpected News image dimensions");
       }
 
-      // News never adds grain; use the shared tagged-sRGB JPEG exporter.
-      const jpg = await makeJpeg(png, { grain: false });
+      // Quotes/editorial posts retain the native lossless capture: no resize,
+      // JPEG encoder, sharpening or grain. Preserve the existing standings export.
+      const lossless = job.layout !== 'standings';
+      const bytes = lossless ? png : await makeJpeg(png, { grain: false });
 
       fs.mkdirSync(outputDir, { recursive: true });
 
-      const jpgPath = path.join(
+      const imagePath = path.join(
         outputDir,
-        `news_${crypto.randomUUID()}.jpg`
+        `news_${crypto.randomUUID()}.${lossless ? 'png' : 'jpg'}`
       );
 
-      fs.writeFileSync(jpgPath, jpg);
+      fs.writeFileSync(imagePath, bytes);
 
-      return { jpg_path: jpgPath };
+      return lossless ? { png_path: imagePath } : { jpg_path: imagePath };
     } finally {
       await context.close().catch(() => {});
     }

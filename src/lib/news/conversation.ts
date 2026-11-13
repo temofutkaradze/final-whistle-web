@@ -3,14 +3,18 @@ import {buildOriginalJob,HELP,type Job} from './parse.ts';
 export const BACKGROUND_SAVED='✅ Background saved. Send the circle image (optional), or send the text now.';
 export const CIRCLE_SAVED='✅ Circle image saved. Now send the text (L: = left, R: = right; default is left).';
 export type PendingNews={background?:string;circle?:string|null;ts?:number};
-export type NewsMessage={text?:string;caption?:string;document?:{file_id:string;mime_type?:string;file_name?:string};photo?:{file_id:string}[]};
+export type NewsMessage={text?:string;caption?:string;document?:{file_id:string;mime_type?:string;file_name?:string};photo?:{file_id:string;width?:number;height?:number;file_size?:number}[]};
 export type NewsTransition={pending:PendingNews|null;reply:string}|{pending:null;job:Job;background:string;circle:string|null};
 
 // Upload metadata is only a hint; download and renderer validate actual bytes.
 // Keep News and standings document/photo acceptance identical.
 export function newsImageFileId(message:NewsMessage):string|undefined{
   const doc=message.document;
-  return doc&&((doc.mime_type??'').startsWith('image/')||/\.(jpe?g|png|webp)$/i.test(doc.file_name??''))?doc.file_id:message.photo?.at(-1)?.file_id;
+  const best=message.photo?.length?message.photo.reduce((chosen,photo)=>{
+    const area=(photo.width??0)*(photo.height??0),chosenArea=(chosen.width??0)*(chosen.height??0);
+    return area>chosenArea||(area===chosenArea&&(photo.file_size??0)>=(chosen.file_size??0))?photo:chosen;
+  }):undefined;
+  return doc&&((doc.mime_type??'').startsWith('image/')||/\.(jpe?g|png|webp)$/i.test(doc.file_name??''))?doc.file_id:best?.file_id;
 }
 
 // Pure local equivalent of Parse Message; no Telegram calls or live n8n execution.

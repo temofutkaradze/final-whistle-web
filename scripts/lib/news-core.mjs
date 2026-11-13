@@ -83,7 +83,7 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       const active=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'sending',requestId:update.update_id}}});
       if(!active.count||!isActive())return;
       phase='send';
-      await tg.sendDocument(chatId,output,transition.job.caption.slice(0,1000),'news-post.jpg');
+      await tg.sendDocument(chatId,output,transition.job.caption.slice(0,1000),output.toLowerCase().endsWith('.png')?'news-post.png':'news-post.jpg');
       delivered=true;
       phase='commit';
       await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'delivered',requestId:update.update_id}}});

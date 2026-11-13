@@ -46,7 +46,7 @@ export function makeTelegram(token) {
     const form = new FormData();
     form.append("chat_id", String(chatId));
     if (caption) form.append("caption", caption);
-    form.append("document", new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }), fileName);
+    form.append("document", new Blob([new Uint8Array(bytes)], { type: path.extname(fileName).toLowerCase()==='.png'?'image/png':'image/jpeg' }), fileName);
     const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(90_000) });
     const data = await res.json();
     if (!data.ok) throw Object.assign(new Error(data.description ?? "Telegram sendDocument failed"), { telegramCode: data.error_code });

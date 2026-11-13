@@ -37,8 +37,8 @@ export async function POST(request:Request) {
     const job=buildJob(layout==='breaking'?'BREAKING | A NEW CHAPTER FOR THE CLUB':'FINAL WHISTLE | THE NEXT CHAPTER\nSTARTS *HERE*', ['left','right'].includes(layout),layout,style);
     const {background,secondary}=await newsPreviewImages();
     output=await renderNewsPost(job,background,['left','right'].includes(layout)?secondary:null);
-    const jpg=await readFile(output);
-    return new Response(new Uint8Array(jpg),{headers:{'content-type':'image/jpeg','cache-control':'no-store'}});
+    const image=await readFile(output);
+    return new Response(new Uint8Array(image),{headers:{'content-type':output.toLowerCase().endsWith('.png')?'image/png':'image/jpeg','cache-control':'no-store'}});
   } catch {return Response.json({error:'Preview unavailable. Check the local render server and NEWS_RENDER_SECRET.'},{status:503});}
   finally {if(output)await unlink(output).catch(()=>{});}
 }

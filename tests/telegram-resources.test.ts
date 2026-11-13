@@ -5,6 +5,16 @@ import {sendMessage,sendDocument} from '@/lib/telegram';
 import {makeTelegram,readTelegramImage,MAX_TELEGRAM_IMAGE,matchImageUpload} from '../scripts/lib/telegram.mjs';
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();files.writeFile.mockClear();files.mkdir.mockClear();});
 describe('website Telegram deadlines without retries',()=>{
+ it('sends PNG bytes with the correct MIME without changing JPEG delivery',async()=>{
+  const fetcher=vi.fn(async(..._args:unknown[])=>new Response(JSON.stringify({ok:true})));vi.stubGlobal('fetch',fetcher);
+  for(const suffix of ['png','jpg']){
+   await makeTelegram('fake').sendDocument('1','/fake/post.'+suffix,'caption','news-post.'+suffix);
+   const body=(fetcher.mock.calls.at(-1)![1] as RequestInit).body as FormData;
+   const document=body.get('document') as File;
+   expect(document.type).toBe(suffix==='png'?'image/png':'image/jpeg');expect(document.name).toBe('news-post.'+suffix);
+   expect(Buffer.from(await document.arrayBuffer())).toEqual(Buffer.from('jpg'));
+  }
+ });
  it('identifies document read failures before any Telegram dispatch',async()=>{
   files.readFile.mockRejectedValueOnce(Object.assign(new Error('missing file'),{code:'ENOENT'}));
   const fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);

@@ -53,17 +53,20 @@ export async function renderNewsPost(
   checkStatus(response.status);
 
   const data = (await response.json()) as {
+    png_path?: string;
     jpg_path?: string;
     error?: string;
   };
 
-  if (!response.ok || !data.jpg_path) {
+  const imagePath=data.png_path??data.jpg_path;
+  if (!response.ok || typeof imagePath!=='string') {
     throw new NewsRenderError('NEWS_RENDER_OUTPUT','The local renderer did not return an image.');
   }
 
   const output = path.resolve('render/output');
-  const file = path.resolve(data.jpg_path);
-  if (path.dirname(file) !== path.resolve(output) || !/^news_[a-f\d-]+\.jpg$/i.test(path.basename(file))) throw new NewsRenderError('NEWS_RENDER_OUTPUT','Unexpected News renderer output path');
+  const file = path.resolve(imagePath);
+  const expected=data.png_path?/^news_[a-f\d-]+\.png$/i:/^news_[a-f\d-]+\.jpg$/i;
+  if (path.dirname(file) !== path.resolve(output) || !expected.test(path.basename(file))) throw new NewsRenderError('NEWS_RENDER_OUTPUT','Unexpected News renderer output path');
   return file;
 }
 

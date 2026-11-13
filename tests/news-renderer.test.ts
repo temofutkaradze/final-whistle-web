@@ -41,7 +41,7 @@ beforeAll(async()=>{
 
 afterAll(async()=>{
   if(child && child.exitCode===null){const exited=new Promise<void>(r=>child.once('exit',()=>r()));child.kill();await Promise.race([exited,pause(3000)]);}
-  for(const file of outputs)if(dirname(file)===resolve(root,'render/output')&&/^news_[a-f\d-]+\.jpg$/i.test(basename(file)))await unlink(file).catch(()=>{});
+  for(const file of outputs)if(dirname(file)===resolve(root,'render/output')&&/^news_[a-f\d-]+\.(jpg|png)$/i.test(basename(file)))await unlink(file).catch(()=>{});
 });
 
 describe('News actual shared Chromium and Sharp pipeline',()=>{
@@ -49,16 +49,15 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     const good=await fetch(`http://127.0.0.1:${port}/news-health`,{headers:auth});expect(await good.json()).toEqual({service:'final-whistle-news',protocolVersion:2});
     const bad=await fetch(`http://127.0.0.1:${port}/news-health`,{headers:{'x-news-render-secret':'wrong'}});expect(bad.status).toBe(401);
   });
-  for(const layout of ['single','left','right','breaking'] as const)it('renders '+layout+' as a real 1080 x 1350 JPG',async()=>{
+  for(const layout of ['single','left','right','breaking'] as const)it('renders '+layout+' as a native lossless 2160 x 2700 PNG',async()=>{
     const job=buildJob(layout==='breaking'?'BREAKING | A NEW CHAPTER':'FINAL WHISTLE | THE NEXT CHAPTER STARTS *HERE*',['left','right'].includes(layout),layout);
     const response=await post({job,background:background.toString('base64'),circle:['left','right'].includes(layout)?secondary.toString('base64'):null});
     expect(response.status).toBe(200);
-    const result=await response.json();expect(typeof result.jpg_path).toBe('string');outputs.add(result.jpg_path);
-    expect(dirname(result.jpg_path)).toBe(resolve(root,'render/output'));
-    const bytes=await readFile(result.jpg_path);expect(await sharp(bytes).metadata()).toMatchObject({width:1080,height:1350,format:'jpeg'});
-    const metadata=await sharp(bytes).metadata();expect(metadata.chromaSubsampling).toBe('4:4:4');expect(metadata.icc?.length).toBeGreaterThan(0);expect(metadata.exif).toBeUndefined();
+    const result=await response.json();expect(typeof result.png_path).toBe('string');outputs.add(result.png_path);
+    expect(dirname(result.png_path)).toBe(resolve(root,'render/output'));
+    const bytes=await readFile(result.png_path);expect(await sharp(bytes).metadata()).toMatchObject({width:2160,height:2700,format:'png'});
     const {data,info}=await sharp(bytes).raw().toBuffer({resolveWithObject:true});
-    const bottom=data.subarray((info.height-100)*info.width*info.channels);
+    const bottom=data.subarray(Math.floor(info.height*.75)*info.width*info.channels);
     expect(bottom.some(value=>value>100)).toBe(true);
   },90_000);
   for(const count of [1,2,3,4,20,36])it('renders fictional standings with '+count+' rows using the actual News pipeline',async()=>{

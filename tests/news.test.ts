@@ -19,7 +19,7 @@ function fixture(linked = true) {
   })};
   const config={...DEFAULT_NEWS_STYLE,accent:'#123456',textSize:80};
   const tg={sendMessage:vi.fn(async()=>({ok:true})),sendDocument:vi.fn(async()=>{})};
-  const render=vi.fn(async(..._args:unknown[])=>'/fake/news.jpg');
+  const render=vi.fn(async(..._args:unknown[])=>'/fake/news.png');
   const diagnostic=vi.fn();
   const handle=createNewsHandler({prisma:{newsSettings:table,newsTemplate:{findFirst:vi.fn(async()=>({config}))}},tg,ownerId:'owner',connectionToken:settings.botToken,download:vi.fn(async()=>Buffer.from('image')),render,cleanup:vi.fn(async()=>{}),now:()=>now,onDiagnostic:diagnostic});
   const update=(id:number,message:Record<string,unknown>,chat=42)=>({update_id:id,message:{chat:{id:chat,type:'private'},from:{id:chat},...message}});
@@ -27,6 +27,9 @@ function fixture(linked = true) {
 }
 
 describe('News original conversation',()=>{
+  it('selects the largest Photo even when sizes arrive out of order',()=>{
+    expect(originalNewsTransition({photo:[{file_id:'largest',width:1638,height:2048},{file_id:'small',width:320,height:400}]},null,now)).toMatchObject({pending:{background:'largest'}});
+  });
   it('takes the largest photo and ignores its caption',()=>{
     expect(originalNewsTransition(photo,null,now)).toEqual({pending:{background:'background',circle:null,ts:now},reply:BACKGROUND_SAVED});
   });
@@ -58,7 +61,7 @@ describe('News bot integration with mocked Telegram and persistence',()=>{
     await f.handle(f.update(3,{document:{file_id:'circle-original',mime_type:'image/png'}}));
     await f.handle(f.update(4,{text:'R: Original Author | A *yellow* quote [b:40,55,1.2] [c:60,20,1.3] || Original caption'}));
     const job=f.render.mock.calls[0][0];expect(job).toMatchObject({layout:'right',author:'Original Author',quote:'A *yellow* quote',caption:'Original caption',pos:{b:[40,55,1.2],c:[60,20,1.3]},style:expect.objectContaining({accent:f.config.accent,textSize:80})});
-    expect(job).not.toHaveProperty('editorial');expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.jpg','Original caption','news-post.jpg');
+    expect(job).not.toHaveProperty('editorial');expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.png','Original caption','news-post.png');
   });
   for(const label of ['Headline + Subtitle','Large Headline','NEWS (Red)','DID YOU KNOW (Yellow)'])it('adds '+label+' without replacing the legacy conversation',async()=>{
     const f=fixture();await f.handle(f.update(1,{document:{file_id:'full-quality-background',file_name:'photo.webp',mime_type:'application/octet-stream'}}));
@@ -73,7 +76,7 @@ describe('News bot integration with mocked Telegram and persistence',()=>{
     const f=fixture();await f.handle(f.update(1,photo));
     const text=f.update(2,{text:'Author | News'});await f.handle(text);await f.handle(text);
     expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0]).toEqual([expect.objectContaining({layout:'single',style:expect.objectContaining({accent:f.config.accent,textSize:80})}),expect.any(Buffer),null]);
-    expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.jpg','','news-post.jpg');
+    expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.png','','news-post.png');
     expect(f.settings.pending.stage).toBe('delivered');
     await f.handle(f.update(3,photo));await f.handle(f.update(4,{text:'Next | Story'}));expect(f.render).toHaveBeenCalledTimes(2);
   });
