@@ -1,5 +1,5 @@
 import type {Job} from './parse.ts';
-import {newsImageFileId,type NewsMessage} from './conversation.ts';
+import {newsImageFileId,BACKGROUND_SAVED,type NewsMessage} from './conversation.ts';
 
 export const EDITORIAL_TEMPLATES={
   'headline-subtitle':'Headline + Subtitle',
@@ -10,7 +10,7 @@ export const EDITORIAL_TEMPLATES={
 export type EditorialTemplate=keyof typeof EDITORIAL_TEMPLATES;
 type EditorialPending={stage:'editorial';background:string;template:EditorialTemplate;step:'headline'|'subtitle';headline?:string;ts:number};
 type Collection={background?:string;circle?:string|null;ts?:number;stage?:string};
-export const EDITORIAL_KEYBOARD={reply_markup:{keyboard:Object.values(EDITORIAL_TEMPLATES).map(text=>[{text}]),resize_keyboard:true,one_time_keyboard:true}};
+export const EDITORIAL_KEYBOARD={reply_markup:{keyboard:[...Object.values(EDITORIAL_TEMPLATES),'Quotes'].map(text=>[{text}]),resize_keyboard:true,one_time_keyboard:true}};
 
 /** Opt-in templates coexist with the original text/circle and standings conversations. */
 export function editorialTransition(message:NewsMessage,raw:unknown,now:number){
@@ -20,6 +20,7 @@ export function editorialTransition(message:NewsMessage,raw:unknown,now:number){
   if(!pending.background||now-(pending.ts??0)>3600000)return null;
   const text=(message.text??'').trim();
   if(/^\//.test(text))return null;
+  if(text==='Quotes'&&(!pending.stage||pending.stage==='collecting'||pending.stage==='editorial'))return {pending:{background:pending.background,circle:pending.circle??null,ts:now},reply:BACKGROUND_SAVED+'\nUse the original Author | quote format, optional L: / R:, crop tags and || caption.'};
   if(pending.stage!=='editorial'){
     if(pending.stage&&pending.stage!=='collecting')return null;
     const template=(Object.keys(EDITORIAL_TEMPLATES) as EditorialTemplate[]).find(key=>EDITORIAL_TEMPLATES[key]===text);

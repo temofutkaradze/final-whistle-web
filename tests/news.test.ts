@@ -51,6 +51,15 @@ describe('News original conversation',()=>{
 });
 
 describe('News bot integration with mocked Telegram and persistence',()=>{
+  it('Quotes button resumes the complete original circle, author, crop, caption and styling workflow',async()=>{
+    const f=fixture();await f.handle(f.update(1,photo));
+    expect(f.tg.sendMessage.mock.calls[0]).toMatchObject(['42',expect.any(String),{reply_markup:{keyboard:expect.arrayContaining([[{text:'Quotes'}]])}}]);
+    await f.handle(f.update(2,{text:'Quotes'}));expect(f.settings.pending).toMatchObject({background:'background',circle:null});expect(f.render).not.toHaveBeenCalled();
+    await f.handle(f.update(3,{document:{file_id:'circle-original',mime_type:'image/png'}}));
+    await f.handle(f.update(4,{text:'R: Original Author | A *yellow* quote [b:40,55,1.2] [c:60,20,1.3] || Original caption'}));
+    const job=f.render.mock.calls[0][0];expect(job).toMatchObject({layout:'right',author:'Original Author',quote:'A *yellow* quote',caption:'Original caption',pos:{b:[40,55,1.2],c:[60,20,1.3]},style:expect.objectContaining({accent:f.config.accent,textSize:80})});
+    expect(job).not.toHaveProperty('editorial');expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.jpg','Original caption','news-post.jpg');
+  });
   for(const label of ['Headline + Subtitle','Large Headline','NEWS (Red)','DID YOU KNOW (Yellow)'])it('adds '+label+' without replacing the legacy conversation',async()=>{
     const f=fixture();await f.handle(f.update(1,{document:{file_id:'full-quality-background',file_name:'photo.webp',mime_type:'application/octet-stream'}}));
     expect(f.tg.sendMessage.mock.calls[0]).toMatchObject(['42',expect.any(String),{reply_markup:{keyboard:expect.arrayContaining([[{text:label}]]),resize_keyboard:true,one_time_keyboard:true}}]);

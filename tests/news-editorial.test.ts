@@ -8,7 +8,7 @@ describe('additional News editorial designs',()=>{
     const job:Job={layout:'single',author:'',quote:'Headline',caption:'',pos:{b:[50,50,1],c:[50,30,1]},editorial:{template,headline:'THE *NEXT\nCHAPTER* <script>alert(1)</script>',subtitle:'Editable *subtitle*'}};
     const html=buildHtml(job,Buffer.from('unchanged-background'),null);
     expect(html).toContain('<span class="yellow">NEXT\nCHAPTER</span>');expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>alert(1)</script>');
-    expect(html).toContain('border:2px solid');expect(html).toContain('.frame #headline{font-size:68px;line-height:1.04;text-align:center}');expect(html).toContain('data-ready');expect(html).toContain(Buffer.from('unchanged-background').toString('base64'));
+    expect(html).toContain('border:3px solid');expect(html).toContain('height:3px;background:');expect(html).toContain('rgba(0,0,0,.92) 90%,#000 100%');expect(html).toContain('.frame #headline{font-size:68px;line-height:1.04;text-align:center}');expect(html).toContain('data-ready');expect(html).toContain(Buffer.from('unchanged-background').toString('base64'));
     expect(()=>buildHtml({...job,editorial:{...job.editorial!,headline:'x'.repeat(301)}},Buffer.from('photo'),null)).toThrow('Invalid editorial');
   });
   it('keeps standings, legacy text, cancel, expiration and replacement uploads available',()=>{

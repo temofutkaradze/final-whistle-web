@@ -56,7 +56,7 @@ html,body{width:2160px;height:2700px;overflow:hidden;background:#080a10}
 .rule{display:flex;align-items:center;justify-content:center;width:100%;padding:0 205px;margin-bottom:30px;height:65px}
 .rule i{flex:1;height:2px;background:rgba(255,255,255,.55)}
 .rule .quote-mark{display:block;margin:0 12px;height:65px;line-height:88px;font-family:Arial,sans-serif;font-size:112px;font-weight:900;color:${style.accent};letter-spacing:-14px;padding-right:14px}
-.quote-mark>span{display:block;transform:scale(.74);transform-origin:center top}
+.quote-mark>span{display:block;position:relative;transform:scale(.74);transform-origin:center top}
 #q{position:relative;top:${style.textTop}px;font-family:'${font}',Anton,Impact,'Arial Narrow',sans-serif;font-size:${style.textSize}px;line-height:${style.lineHeight};${style.letterSpacing?`letter-spacing:${style.letterSpacing}px;`:''}-webkit-text-stroke:1.5px;text-align:${style.align};color:${style.textColor};text-transform:uppercase;text-wrap:balance;width:100%}
 .y{color:${style.accent}}
 .breaking-bottom{position:absolute;left:${Math.max(20,style.textInset-6)}px;right:${Math.max(20,style.textInset-6)}px;bottom:${style.textBottom+26}px;display:flex;flex-direction:column;align-items:center;${style.textTop!==-35?`transform:translateY(${style.textTop+35}px)`:''}}
@@ -97,6 +97,14 @@ function fit(){
   if(bs){var sf=${style.breakingSize};while(sf>22&&bs.offsetHeight>240){sf-=1;bs.style.fontSize=sf+'px';}}
   var as=${style.authorSize};
   while(as>16&&a.scrollWidth>a.clientWidth){as-=1;a.style.fontSize=as+'px';}
+  // Center the actual quotation glyph ink, not its much taller font line box.
+  var mark=document.querySelector('.quote-mark>span'),cs=getComputedStyle(mark);
+  var ctx=document.createElement('canvas').getContext('2d');ctx.font=cs.fontWeight+' '+cs.fontSize+' '+cs.fontFamily;
+  var m=ctx.measureText(mark.textContent),asc=m.fontBoundingBoxAscent,desc=m.fontBoundingBoxDescent;
+  if(Number.isFinite(asc)&&Number.isFinite(desc)){
+    var baseline=(parseFloat(cs.lineHeight)-asc-desc)/2+asc;
+    mark.style.top=(mark.parentNode.clientHeight/2-.74*(baseline+(m.actualBoundingBoxDescent-m.actualBoundingBoxAscent)/2))+'px';
+  }
 }
 // The render server waits for data-ready before it takes the screenshot (this replaces Gotenberg's fixed "waitDelay 3s").
 var done=false;
