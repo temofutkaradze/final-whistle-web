@@ -21,7 +21,7 @@ import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR, renderPost, brandLookFields } from "./lib/render.mjs";
 import {regenerateAssignedMatches} from './lib/manual-match-post.mjs';
 import { ensureDay, formatKickoff, localDayRange } from "./lib/football.mjs";
-import { listAvailableMatches, filterMatchList } from "./lib/match-list.mjs";
+import { listAvailableMatches, filterMatchList, matchVisibilityWhere } from "./lib/match-list.mjs";
 import { MAX_AGE_HOURS } from "./lib/config.mjs";
 import { runPoller, shouldRestart } from "./lib/poller.mjs";
 import { toggleSelection } from "./lib/selection.mjs";
@@ -110,6 +110,7 @@ async function handleUpload(ctx, msg, chatId) {
   const open = await prisma.selection.findMany({
     where: {
       userId: user.id,
+      match: matchVisibilityWhere(localDayRange),
       status: { not: "DESELECTED" },
     },
     include: { match: true },
