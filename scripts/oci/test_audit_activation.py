@@ -38,7 +38,7 @@ class Backend:
             return a.Page([])
         if operation == "compartments":
             return a.Page([{"id": self.env["OCI_COMPARTMENT_OCID"]}])
-        if operation in ("subscriptions", "subscription", "usage"):
+        if operation in ("subscriptions", "subscription", "usage", "quotas"):
             return Fake()(operation, region, args)
         for prefix, (op, options) in x.READS.items():
             if op == operation:
@@ -144,7 +144,7 @@ class ActivationAuditTests(unittest.TestCase):
             with patch.object(sys, "argv", args), patch.object(x, "run", return_value=report), \
                     patch.object(a, "SDKBackend"), patch.object(x, "IssueReader"), \
                     patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), patch("sys.stdout", new=io.StringIO()) as log:
-                self.assertEqual(x.main(), 0)
+                self.assertEqual(x.main(), 2)  # Missing root quota remains a required evidence failure.
                 before = output.read_bytes()
                 self.assertEqual(x.main(), 2)
                 self.assertEqual(before, output.read_bytes())
