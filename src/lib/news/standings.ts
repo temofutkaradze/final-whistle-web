@@ -30,7 +30,7 @@ export type StandingRow={position:number;displayRow?:number;teamId:string;name:s
 // Logos are approved raster bytes encoded as base64, never URLs or SVG markup.
 export type StandingsTable={leagueId:number;seasonStart:string;seasonEnd:string;source:string;fetchedAt:number;leagueLogo:string;totalTeams:number;rows:StandingRow[]};
 export type StandingsComposition={backgroundX?:number;backgroundY?:number;panelOffset?:number};
-export type StandingsJob={layout:'standings';author:string;quote:string;caption:string;pos:{b:[number,number,number];c:[number,number,number]};standings:StandingsTable;composition?:StandingsComposition};
+export type StandingsJob={branding?:boolean;layout:'standings';author:string;quote:string;caption:string;pos:{b:[number,number,number];c:[number,number,number]};standings:StandingsTable;composition?:StandingsComposition};
 export function validateTable(table:StandingsTable,leagueId:number,now=Date.now(),selected=false):StandingsTable{
   const fail=()=>{throw new StandingsError('STANDINGS_DATA','Current standings are incomplete, ambiguous or unavailable. Please try later.');};
   if(!table||!standingsLeagues.some(l=>l.id===leagueId)||table.leagueId!==leagueId||typeof table.source!=='string'||!table.source.trim()||table.source.length>160||!Number.isFinite(table.fetchedAt)||table.fetchedAt>now+60_000||now-table.fetchedAt>60*60_000)fail();

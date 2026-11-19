@@ -609,7 +609,8 @@ describe('initial-delay request-count impact',()=>{
       });
       const core=makeCore({config:{...config,DELAY_MINUTES:delay,CHECK_INTERVAL_MIN:interval}});
       for(let minute=0;minute<=140;minute++){clock.now=T0+minute*MIN;await core.tick();}
-      expect(sel('s1').status).toBe('COMPLETED');expect(football.fetchEvents).toHaveBeenCalledTimes(1);
+      expect(sel('s1').status).toBe('COMPLETED');
+      expect(football.fetchEvents).toHaveBeenCalledTimes(1+tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('90+ Live Checkpoint')).length);
       expect(tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('Full Time'))).toHaveLength(1);
       expect(tg.sendDocument.mock.calls.filter(c=>String(c[2]).startsWith('90+ Live Checkpoint')).length).toBeLessThanOrEqual(1);
       expect(checks.every((value,i)=>i===0||value-checks[i-1]>=interval)).toBe(true);
@@ -621,6 +622,37 @@ describe('initial-delay request-count impact',()=>{
 });
 
 describe('live checkpoint and independent final delivery',()=>{
+  it('reuses a complete live snapshot on rendering retry, but fetches final events independently',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();
+    apiEvents[1]=[GOAL(10),GOAL(20),GOAL(30,'Beta FC',3,'Away Player')];
+    renderPost.mockRejectedValueOnce(new Error('broken render'));
+    const core=makeCore();await core.tick();advance(5);await core.tick();
+    expect(football.fetchEvents).toHaveBeenCalledTimes(1);expect(sel('s1').liveStatus).toBe('SENT');
+    Object.assign(match(1),{statusShort:'FT'});await core.tick();
+    expect(football.fetchEvents).toHaveBeenCalledTimes(2);expect(sel('s1').status).toBe('COMPLETED');
+  });
+  it('includes available live goals and red cards without caching final events or later goals',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();
+    apiEvents[1]=[GOAL(15),GOAL(91),{...GOAL(70),type:'Card',detail:'Red Card'}];
+    await makeCore().tick();
+    const post=renderPost.mock.calls[0][0];
+    expect(post.home_events_html).toContain('J. Sample');
+    expect(post.home_events_html).toContain('15');
+    expect(post.home_events_html).toContain('card-icon red');
+    expect(post.home_events_html).not.toContain('91');
+    expect(post.total_events).toBe(2);
+    expect(football.saveEvents).not.toHaveBeenCalled();
+    expect(sel('s1')).toMatchObject({status:'SELECTED',liveStatus:'SENT'});
+  });
+  it('still sends the live checkpoint when event lookup fails',async()=>{
+    addMatch(1);addSel('s1','u1',1);observeLive();
+    football.fetchEvents.mockRejectedValueOnce(new Error('provider unavailable'));
+    await makeCore().tick();
+    expect(tg.sendDocument).toHaveBeenCalledTimes(1);
+    expect(sel('s1')).toMatchObject({status:'SELECTED',liveStatus:'SENT'});
+    expect(football.saveEvents).not.toHaveBeenCalled();
+  });
+
   it('processes a cached previous-day selection with its assigned photo through both stages',async()=>{
     const file=path.resolve('storage/backgrounds/previous-day.jpg');
     addMatch(1,{day:'2026-10-09'});db.tables.user[0].pendingBackgroundPath=file;
@@ -646,7 +678,7 @@ describe('live checkpoint and independent final delivery',()=>{
     football.refreshStatuses.mockImplementation(async()=>{observeLive(1,elapsed,extra);});
     const core=makeCore();await core.tick();expect(football.refreshStatuses).not.toHaveBeenCalled();
     advance(1);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
-    expect(football.fetchEvents).not.toHaveBeenCalled();expect(sel('s1').status).toBe('SELECTED');
+    expect(football.fetchEvents).toHaveBeenCalledTimes(sends);expect(sel('s1').status).toBe('SELECTED');
     if(sends){expect(renderPost.mock.calls[0][0]).toMatchObject({fixture_id:'1_s1_live',home_score:2,away_score:1,total_events:0,home_events_html:'',away_events_html:''});expect(String(tg.sendDocument.mock.calls[0][2])).toContain('90+ Live Checkpoint');}
     advance(0.5);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(1);
     advance(0.5);await core.tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(tg.sendDocument).toHaveBeenCalledTimes(sends);
@@ -657,7 +689,7 @@ describe('live checkpoint and independent final delivery',()=>{
     // Recreate the worker: persistent stage tracking, not an in-memory dedupe.
     advance(10);football.refreshStatuses.mockImplementation(async()=>Object.assign(match(1),{statusShort:'FT',homeScore:2,awayScore:away,lastCheckedAt:new Date(clock.now)}));
     apiEvents[1]=[GOAL(10)];const restarted=makeCore();await restarted.tick();await restarted.tick();
-    expect(tg.sendDocument).toHaveBeenCalledTimes(2);expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(football.fetchEvents).toHaveBeenCalledTimes(1);
+    expect(tg.sendDocument).toHaveBeenCalledTimes(2);expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(football.fetchEvents).toHaveBeenCalledTimes(2);
     expect(renderPost.mock.calls[1][0]).toMatchObject({fixture_id:'1_s1',home_score:2,away_score:away});
     expect(String(tg.sendDocument.mock.calls[1][2])).toContain('Full Time');expect(sel('s1').status).toBe('COMPLETED');
   });
@@ -677,7 +709,7 @@ describe('live checkpoint and independent final delivery',()=>{
     addUser('u2');addMatch(1,{day:'2026-10-09'});addSel('s1','u1',1,{backgroundPath:'photo-a'});addSel('s2','u2',1,{backgroundPath:'photo-b'});observeLive();
     await makeCore({pickBackground:async(s:{backgroundPath:string})=>({background_path:s.backgroundPath})}).tick();
     expect(renderPost.mock.calls.map(c=>[c[0].page_name,c[0].background_path])).toEqual([['Page u1','photo-a'],['Page u2','photo-b']]);
-    expect(tg.sendDocument.mock.calls.map(c=>c[0])).toEqual(['101','102']);expect(football.fetchEvents).not.toHaveBeenCalled();
+    expect(tg.sendDocument.mock.calls.map(c=>c[0])).toEqual(['101','102']);expect(football.fetchEvents).toHaveBeenCalledTimes(1);
   });
   it('claims one live dispatch under concurrent ticks and recovers only pre-dispatch claims',async()=>{
     addMatch(1);addSel('s1','u1',1);observeLive();const core=makeCore();await Promise.all([core.tick(),makeCore().tick()]);

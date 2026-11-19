@@ -1,0 +1,31 @@
+// Local CPU-only benchmark: no services, network, database or Telegram.
+import fs from 'node:fs';
+import vm from 'node:vm';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+import sharp from 'sharp';
+import {newsPreviewImages} from '../../src/lib/news/preview.ts';
+const require=createRequire(import.meta.url);
+const {normalizeStandingsCrest}=require('../../render/standings-artwork.js');
+const {createNewsAssets}=require('../../render/news-assets.js');
+const {buildHtml}=await import('../../src/lib/news/html.ts');
+const {buildOriginalJob}=await import('../../src/lib/news/parse.ts');
+const file=process.argv[2];
+if(!file)throw Error('Pass an existing local PNG capture, e.g. node scripts/quality/optimization-benchmark.mjs capture.png');
+const png=fs.readFileSync(path.resolve(file)),meta=await sharp(png).metadata();
+if(meta.format!=='png'||meta.width!==2160||meta.height!==2700)throw Error('Expected a 2160x2700 PNG capture');
+const source=fs.readFileSync('render/render-server.js','utf8');
+const constants=['FINAL_WIDTH','FINAL_HEIGHT','JPEG_QUALITY','GRAIN_SIGMA'].map(name=>source.match(new RegExp(`const ${name} = [0-9]+;`))[0]).join('\n');
+const fn=source.slice(source.indexOf('async function makeJpeg(')).match(/^[\s\S]*?\r?\n\}/)[0];
+const jpeg=vm.runInNewContext(constants+'\n'+fn+'\nmakeJpeg',{sharp});
+const measure=async work=>{const start=performance.now(),cpu=process.cpuUsage();const value=await work();const use=process.cpuUsage(cpu);return {ms:performance.now()-start,cpuMs:(use.user+use.system)/1000,value};};
+await jpeg(png,{grain:false});
+const encodes=[];for(let i=0;i<3;i++){const r=await measure(()=>jpeg(png,{grain:false}));encodes.push({ms:r.ms,cpuMs:r.cpuMs,bytes:r.value.length});}
+const firstPreview=await measure(newsPreviewImages),previewHits=[];
+for(let i=0;i<20;i++)previewHits.push((await measure(newsPreviewImages)).ms);
+const crest=fs.readFileSync('render/assets/leagues/symbols/2.png'),firstCrest=await measure(()=>normalizeStandingsCrest(crest)),crestHits=[];
+for(let i=0;i<20;i++)crestHits.push((await measure(()=>normalizeStandingsCrest(crest))).ms);
+const job=buildOriginalJob('Author | Quality verification',false);
+const embedded=Buffer.byteLength(buildHtml(job,png,null)),routed=Buffer.byteLength(buildHtml(job,png,null,createNewsAssets().add));
+const median=a=>[...a].sort((a,b)=>a-b)[Math.floor(a.length/2)];
+console.log(JSON.stringify({fixture:{width:meta.width,height:meta.height,bytes:png.length},jpeg:{samples:encodes,medianMs:median(encodes.map(x=>x.ms)),medianCpuMs:median(encodes.map(x=>x.cpuMs))},preview:{coldMs:firstPreview.ms,warmMedianMs:median(previewHits)},crest:{coldMs:firstCrest.ms,warmMedianMs:median(crestHits)},html:{embeddedBytes:embedded,routedBytes:routed,removedBytes:embedded-routed},peakNodeMiB:process.resourceUsage().maxRSS/1024,note:'Encoder cost excludes capture/disk/Telegram. Cache cold measurement is one sample; not a full-render speedup.'},null,2));

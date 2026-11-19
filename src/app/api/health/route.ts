@@ -5,14 +5,21 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    const [schema] = await prisma.$queryRaw<Array<{ready:boolean}>>`
+      SELECT to_regclass('public."AuthIdentity"') IS NOT NULL
+         AND to_regclass('public."MatchPairingChallenge"') IS NOT NULL
+         AND to_regclass('public."MatchTelegramBinding"') IS NOT NULL AS ready
+    `;
+    if (!schema?.ready) {
+      return Response.json({ok:false,database:"schema_incomplete"},{status:503});
+    }
 
     return Response.json({
       ok: true,
       database: "connected",
     });
-  } catch (error) {
-    console.error("Database health check failed", error);
+  } catch {
+    console.error("Database health check failed");
 
     return Response.json(
       {

@@ -2,8 +2,10 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const {alignBranding}=require("./branding-position.js");
 const {prepareStandingsBackground,normalizeStandingsCrest}=require('./standings-artwork.js');
 const {withPageDeadline}=require("./operations.js");
+const {createNewsAssets}=require('./news-assets.js');
 
 module.exports = function createNewsRenderer({
   getBrowser,
@@ -12,7 +14,7 @@ module.exports = function createNewsRenderer({
   sharp,
   outputDir,
 }) {
-  return async function renderNews(job, background, circle) {
+  return async function renderNews(job, background, circle, signal) {
     const validLayouts = ["single", "left", "right", "breaking", "standings"];
 
     if (!job || !validLayouts.includes(job.layout)) {
@@ -46,6 +48,34 @@ module.exports = function createNewsRenderer({
 
     const backgroundMeta=await validateImage(background, "background");
     await validateImage(circle, "circle");
+    const assets=createNewsAssets();
+    if(job.brandingOnly===true){
+      // Match News's high-resolution rasterization without cropping the source.
+      // Keep larger originals; smaller inputs fit within the 2160x2700 export envelope.
+      const bytes=await sharp(background).rotate().png().toBuffer();
+      const source=await sharp(bytes).metadata();
+      const scale=Math.max(1,Math.min(2160/source.width,2700/source.height));
+      const width=Math.round(source.width*scale),height=Math.round(source.height*scale);
+      const browser=await getBrowser();
+      const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:1});
+      try{
+        const page=await context.newPage();
+        const png=await withPageDeadline(page,async()=>{
+          await page.route('**/*',assets.route);
+          await page.setContent(`<html><body style="margin:0;overflow:hidden;width:${width}px;height:${height}px"><img style="display:block;width:${width}px;height:${height}px" src="${assets.add(bytes)}"></body></html>`);
+          await page.evaluate(()=>document.images[0].decode());
+          await alignBranding(page);
+          // Branding can retain non-poster dimensions. Keep it independent of the
+          // shared fixed-size capture policy used by Match and other News layouts.
+          return page.screenshot({type:'png',scale:'device',animations:'disabled',timeout:120000});
+        },undefined,signal);
+        const meta=await sharp(png).metadata();
+        if(meta.format!=='png'||meta.width!==width||meta.height!==height)throw new Error('Unexpected Branding image dimensions or format');
+        fs.mkdirSync(outputDir,{recursive:true});
+        const imagePath=path.join(outputDir,`news_${crypto.randomUUID()}.png`);
+        signal?.throwIfAborted();fs.writeFileSync(imagePath,png);return {png_path:imagePath};
+      }finally{await context.close().catch(()=>{});}
+    }
     
     const { buildHtml } = await import(
       "../src/lib/news/html.ts"
@@ -77,7 +107,7 @@ module.exports = function createNewsRenderer({
       if(reviewCount)console.warn('Standings artwork: '+reviewCount+' unmapped club name(s) need review; original names retained.');
       // One deterministic cover crop; no backdrop copy or subject detection.
       html=buildStandingsHtml(job,bg,backings.slice(1));
-    }else html=buildHtml(job, bg, secondary);
+    }else html=buildHtml(job, bg, secondary,assets.add);
 
     // Separate browser context: Match rendering remains isolated.
     const browser = await getBrowser();
@@ -92,20 +122,7 @@ module.exports = function createNewsRenderer({
       const page = await context.newPage();
 
       const png=await withPageDeadline(page,async()=>{
-        await page.route("**/*", (route) => {
-          const url = route.request().url();
-          let allowed = false;
-
-          try {
-            const parsed = new URL(url);
-            allowed =
-              parsed.protocol === "data:" ||
-              parsed.protocol === "about:" ||
-              false; // News fonts and images are embedded. No network or local-file access.
-          } catch {}
-
-          return allowed ? route.continue() : route.abort();
-        });
+        await page.route('**/*',assets.route);
 
         await page.setContent(html, {
           waitUntil: "load",
@@ -121,8 +138,9 @@ module.exports = function createNewsRenderer({
         const error = await page.evaluate(() => document.documentElement.getAttribute('data-error'));
         if (error) throw new Error(error);
 
+        if(job.branding===true)await alignBranding(page);
         return captureHiRes(page, context);
-      });
+      },undefined,signal);
       const meta = await sharp(png).metadata();
 
       if (meta.width !== 2160 || meta.height !== 2700) {
@@ -141,7 +159,7 @@ module.exports = function createNewsRenderer({
         `news_${crypto.randomUUID()}.${lossless ? 'png' : 'jpg'}`
       );
 
-      fs.writeFileSync(imagePath, bytes);
+      signal?.throwIfAborted();fs.writeFileSync(imagePath, bytes);
 
       return lossless ? { png_path: imagePath } : { jpg_path: imagePath };
     } finally {

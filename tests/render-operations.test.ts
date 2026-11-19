@@ -4,6 +4,12 @@ const {createSingleFlight,createMetrics,withPageDeadline,createCapturePolicy,cre
 afterEach(()=>{vi.useRealTimers();});
 function deferred(){let resolve!:(value?:unknown)=>void;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};}
 describe('bounded renderer operations',()=>{
+ it('cancels only the owning page and leaves sibling work healthy',async()=>{
+  const controller=new AbortController(),close=vi.fn();
+  const pending=withPageDeadline({close},()=>new Promise(()=>{}),5000,controller.signal);
+  const rejection=expect(pending).rejects.toThrow('cancelled');controller.abort();await rejection;
+  expect(close).toHaveBeenCalledOnce();expect(await withPageDeadline({close:vi.fn()},()=>42)).toBe(42);
+ });
  it('shares only concurrent identical work and clears settled entries',async()=>{
   const gate=deferred(),work=vi.fn(()=>gate.promise),flight=createSingleFlight(2);
   const a=flight.run('same',work),b=flight.run('same',work);expect(a).toBe(b);await Promise.resolve();expect(work).toHaveBeenCalledTimes(1);gate.resolve('ok');expect(await a).toBe('ok');expect(flight.size).toBe(0);

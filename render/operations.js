@@ -53,8 +53,16 @@ function createMetrics(window = 200) {
 
 // One timer per page. Expiry closes only that page, never its context/shared browser.
 // The timer covers browser work, not output encoding/writing, which must finish atomically for callers.
-async function withPageDeadline(page, work, timeoutMs = 300_000) {
-  let timer;
+async function withPageDeadline(page, work, timeoutMs = 300_000, signal) {
+  let timer,onAbort;
+  const aborted=new Promise((_,reject)=>{
+    onAbort=()=>{
+      reject(Object.assign(new Error('Render request cancelled'),{code:'RENDER_CANCELLED'}));
+      Promise.resolve().then(()=>page.close()).catch(()=>{});
+    };
+    signal?.addEventListener('abort',onAbort,{once:true});
+    if(signal?.aborted)onAbort();
+  });
   const expired = new Promise((_, reject) => {
     timer = setTimeout(() => {
       reject(Object.assign(new Error('Render page deadline exceeded'), {code: 'RENDER_PAGE_DEADLINE'}));
@@ -62,8 +70,8 @@ async function withPageDeadline(page, work, timeoutMs = 300_000) {
     }, timeoutMs);
     timer.unref?.();
   });
-  try { return await Promise.race([Promise.resolve().then(work), expired]); }
-  finally { clearTimeout(timer); }
+  try { return await Promise.race([Promise.resolve().then(()=>{if(signal?.aborted)throw new Error('Render request cancelled');return work();}), expired,aborted]); }
+  finally { clearTimeout(timer);signal?.removeEventListener('abort',onAbort); }
 }
 
 function createCapturePolicy() {

@@ -1,3 +1,4 @@
+import {documentForm} from "../../scripts/lib/document-form.mjs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -19,10 +20,7 @@ export async function sendMessage(chatId: string, text: string, token: string): 
 export async function sendDocument(chatId: string, filePath: string, caption: string | undefined, token: string): Promise<void> {
   const bytes = await readFile(filePath);
 
-  const form = new FormData();
-  form.append("chat_id", chatId);
-  if (caption) form.append("caption", caption);
-  form.append("document", new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }), path.basename(filePath));
+  const form=documentForm(chatId,bytes,caption,path.basename(filePath));
 
   const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
     method: "POST",

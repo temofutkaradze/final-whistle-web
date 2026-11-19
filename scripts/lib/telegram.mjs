@@ -1,3 +1,4 @@
+import {documentForm} from "./document-form.mjs";
 import {createIdleCache} from './idle-cache.mjs';
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -43,10 +44,7 @@ export function makeTelegram(token) {
     let bytes;
     try { bytes = await readFile(filePath); }
     catch (e) { e.deliveryNotAttempted = true; throw e; }
-    const form = new FormData();
-    form.append("chat_id", String(chatId));
-    if (caption) form.append("caption", caption);
-    form.append("document", new Blob([new Uint8Array(bytes)], { type: path.extname(fileName).toLowerCase()==='.png'?'image/png':'image/jpeg' }), fileName);
+    const form=documentForm(chatId,bytes,caption,fileName);
     const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(90_000) });
     const data = await res.json();
     if (!data.ok) throw Object.assign(new Error(data.description ?? "Telegram sendDocument failed"), { telegramCode: data.error_code });

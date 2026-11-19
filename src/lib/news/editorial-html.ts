@@ -8,9 +8,11 @@ export function buildEditorialHtml(job:Job,background:string,fonts:string){
   const design=job.editorial;
   if(!design||!Object.hasOwn(EDITORIAL_TEMPLATES,design.template)||typeof design.headline!=='string'||!design.headline.replace(/\*/g,'').trim()||design.headline.length>300||typeof design.subtitle!=='string'||design.subtitle.length>450)throw Error('Invalid editorial template or text');
   const framed=design.template==='news-red'||design.template==='did-you-know';
+  if(design.version!==undefined&&design.version!==1&&design.version!==2)throw Error('Invalid editorial version');
+  const insetLabel=framed&&design.version===2;
   const subtitle=design.template==='headline-subtitle';
-  const label=design.template==='news-red'?'NEWS':'DID YOU KNOW';
-  const color=design.template==='news-red'?'#ef3e3e':'#f5d428';
+  const label=design.template==='news-red'?'NEWS':insetLabel?'DID YOU KNOW?':'DID YOU KNOW';
+  const color=design.template==='news-red'?(insetLabel?'#e8444b':'#ef3e3e'):(insetLabel?'#e8c451':'#f5d428');
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 ${fonts}
 *{box-sizing:border-box;margin:0;padding:0}html,body{width:2160px;height:2700px;overflow:hidden;background:#080a10}
@@ -25,6 +27,14 @@ ${fonts}
 .label-row::before,.label-row::after{content:'';flex:1;height:3px;background:${color}}
 .label{flex:none;color:${color};font:400 ${design.template==='news-red'?66:54}px/1 Anton,'League Gothic',sans-serif;letter-spacing:${design.template==='news-red'?8:0}px;${design.template==='news-red'?'padding-left:8px;text-shadow:0 2px 8px rgba(0,0,0,.8);':''}}
 .frame #headline{font-size:68px;line-height:1.04;text-align:center}
+${insetLabel?`
+.frame{bottom:92px;height:248px;border-top:3px solid ${color};padding:54px 36px 48px}
+.label-row{left:0;right:0;gap:0;justify-content:center}
+.label-row::before,.label-row::after{display:none}
+.label{height:${design.template==='news-red'?59:50}px;display:flex;align-items:center;justify-content:center;padding:0 22px;border-radius:2px;background:${color};color:${design.template==='news-red'?'#ffffff':'#14191c'};font:800 ${design.template==='news-red'?47:25}px/1 Montserrat,Arial,sans-serif;letter-spacing:${design.template==='news-red'?3:1.8}px;text-shadow:none}
+.frame #headline{font-size:${design.template==='news-red'?68:62}px;line-height:${design.template==='news-red'?1.04:1.15};color:#f7f7f5}
+${design.template==='news-red'?'.frame{padding:40px 32px 22px}':''}
+`:''}
 </style></head><body><div class="post"><img id="background" src="${background}"><div class="shade"></div>
 ${framed?`<div class="frame"><div class="label-row"><span class="label">${label}</span></div><div id="headline">${highlighted(design.headline)}</div></div>`:`<div class="copy"><div id="headline">${highlighted(design.headline)}</div>${subtitle?`<div id="subtitle">${highlighted(design.subtitle)}</div>`:''}</div>`}
 </div><script>
@@ -33,7 +43,7 @@ function fitText(el,maxHeight){let size=parseFloat(getComputedStyle(el).fontSize
 Promise.all([bg.decode(),document.fonts.load('94px "League Gothic"'),document.fonts.load('68px Anton')]).then(()=>{
  const scale=Math.max(1080/bg.naturalWidth,1350/bg.naturalHeight),width=bg.naturalWidth*scale,height=bg.naturalHeight*scale;
  bg.style.width=width+'px';bg.style.height=height+'px';bg.style.left=(1080-width)/2+'px';bg.style.top=(1350-height)/2+'px';
- fitText(document.getElementById('headline'),${framed?166:subtitle?210:310});const sub=document.getElementById('subtitle');if(sub)fitText(sub,112);
+ fitText(document.getElementById('headline'),${framed?(insetLabel&&design.template!=='news-red'?146:166):subtitle?210:310});const sub=document.getElementById('subtitle');if(sub)fitText(sub,112);
  document.documentElement.setAttribute('data-ready','1');
 }).catch(()=>{document.documentElement.setAttribute('data-error','Editorial image or font could not load');document.documentElement.setAttribute('data-ready','1');});
 </script></body></html>`;

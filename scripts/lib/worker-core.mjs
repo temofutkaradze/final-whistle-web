@@ -2,6 +2,7 @@ import {approvedMatchUser} from './match-pairing.mjs';
 import {deleteUnusedBackground} from './background-files.mjs';
 import {realpath,lstat} from 'node:fs/promises';
 import {isLiveCheckpoint} from './live-checkpoint.mjs';
+import {createIdleCache} from './idle-cache.mjs';
 // The brain of the worker (scripts/worker.mjs): finds finished matches, builds the post for every customer who picked the
 // match and sends it to their approved Telegram chat. Its external dependencies (database,
 // match data, render server, Telegram, the clock) is handed in, so tests can replace all of it.
@@ -94,6 +95,7 @@ export function createWorkerCore(deps) {
   const sendBackoff = createBackoff({ baseMs: minutes(1), maxMs: minutes(10) });
   const emptyEvents = new Map(); // fixtureId -> how many times the events came back empty
   const deliveredButUnsaved = new Map(); // selectionId -> time (post is out, only the database note is missing)
+  const liveSnapshots=createIdleCache({max:128,ttlMs:hours(1),now});
 
   // Sends a plain message to the customer through THEIR bot; never lets a Telegram error stop the worker.
   async function notify(user, text) {
@@ -236,6 +238,7 @@ export function createWorkerCore(deps) {
     // 2) Events for every finished match that does not have them yet (shared by all customers).
     const ids = [...new Set(sels.map((s) => s.fixtureId))];
     let matches = await prisma.match.findMany({ where: { fixtureId: { in: ids } } });
+    let eventsSaved=false;
     for (const m of matches) {
       if (!isFinished(m.statusShort) || m.eventsJson) continue;
       const key = String(m.fixtureId);
@@ -253,6 +256,7 @@ export function createWorkerCore(deps) {
           }
         }
         await football.saveEvents(m.fixtureId, events);
+        eventsSaved=true;
         emptyEvents.delete(m.fixtureId);
         eventsBackoff.ok(key);
       } catch (e) {
@@ -260,7 +264,7 @@ export function createWorkerCore(deps) {
         error(`[events failed] ${m.homeTeam} - ${m.awayTeam}: ${e.message} (next try in ${Math.round(pause / 60e3)} min)`);
       }
     }
-    matches = await prisma.match.findMany({ where: { fixtureId: { in: ids } } });
+    if(eventsSaved)matches = await prisma.match.findMany({ where: { fixtureId: { in: ids } } });
     const matchById = new Map(matches.map((m) => [m.fixtureId, m]));
     const htmlCache = new Map();
 
@@ -334,7 +338,8 @@ export function createWorkerCore(deps) {
     }
 
     // Final deliveries above always take priority. Live uses only the frozen first scheduled
-    // observation and never requests events or changes the selection's final-processing status.
+    // observation; live event data is never saved as the final event cache.
+    const liveHtmlCache = new Map();
     for (const sel of sels) {
       const match = matchById.get(sel.fixtureId);
       const shot = match?.liveCheckpointJson;
@@ -348,7 +353,33 @@ export function createWorkerCore(deps) {
         data:{liveStatus:'SENDING',liveUpdatedAt:new Date(t)}});
       if (!claimed.count) continue;
       try {
-        await sendOne(sel, {...match,...shot}, {home_events_html:'',away_events_html:'',total_events:0}, 'live');
+        const snapshotKey=JSON.stringify([match.fixtureId,shot,match.homeTeamId,match.awayTeamId,match.homeTeam,match.awayTeam]);
+        const cached=liveSnapshots.get(snapshotKey);
+        if(cached)liveHtmlCache.set(match.fixtureId,cached);
+        if (!liveHtmlCache.has(match.fixtureId)) {
+          let events = [];
+          try {
+            events = await football.fetchEvents(match.fixtureId);
+          } catch (e) {
+            // Missing provider details must not postpone the existing live delivery.
+            error(`[live events failed] fixture ${match.fixtureId}: ${e.message}`);
+          }
+          // Retries retain the frozen checkpoint score, so exclude later playing-time events.
+          const available = (Array.isArray(events) ? events : []).filter(ev => {
+            const minute = ev?.time?.elapsed;
+            return Number.isInteger(minute) && (minute < shot.elapsed ||
+              (minute === shot.elapsed && (ev.time.extra ?? 0) <= (shot.extra ?? 0)));
+          });
+          liveHtmlCache.set(match.fixtureId, buildEventsHtml(available, {
+            home_team_id:match.homeTeamId, away_team_id:match.awayTeamId,
+            home_team:match.homeTeam, away_team:match.awayTeam,
+            home_score:shot.homeScore, away_score:shot.awayScore,
+          }));
+          // Reuse only complete named scoring snapshots; incomplete provider data is retried.
+          const goals=available.filter(e=>String(e.type).toLowerCase()==='goal'&&!/cancel|disallow|missed/i.test(e.detail??'')&&!/shootout/i.test(e.comments??''));
+          if(available.length&&goals.length===shot.homeScore+shot.awayScore&&goals.every(e=>e.player?.name))liveSnapshots.set(snapshotKey,liveHtmlCache.get(match.fixtureId));
+        }
+        await sendOne(sel, {...match,...shot}, liveHtmlCache.get(match.fixtureId), 'live');
         await prisma.selection.update({where:{id:sel.id},data:{liveStatus:'SENT',liveSentAt:new Date(now()),liveLastError:null}});
       } catch(e) {
         if (!isActive()) throw e;

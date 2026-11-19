@@ -1,6 +1,6 @@
 // render-server.js
 // A small, persistent local HTTP server. The worker (scripts/worker.mjs) and the dashboard call it
-// (POST /render) to draw a result post with Playwright (Chromium) and get back a finished JPEG.
+// (POST /render) to draw a result post with Chromium and return a native PNG plus compatibility JPEG.
 //
 // It lives in this project (render/), so everything it needs is next to it:
 //   render/templates/<name>.html   the built-in templates (classic, panel, frame, stripe)
@@ -14,12 +14,12 @@
 // Rendering pipeline:
 //   background (any size) -> CSS object-fit: cover inside the 1080x1350 layout
 //   -> Chromium renders at deviceScaleFactor 2 => 2160x2700 physical pixels (kept in memory)
-//   -> sharp downscales to exactly 1080x1350 (Lanczos3) -> tagged sRGB JPEG, quality 97
+//   -> save the native lossless PNG; Sharp also supplies a legacy 1080x1350 JPEG, quality 97
 //
 // Speed notes (none of these change the picture):
 //   * one long-lived Chromium + one shared browser context, warmed up at start-up
 //   * team / league logos are cached on disk, so a render needs no network for them
-//   * the 2160x2700 intermediate is never written to disk (see KEEP_PNG)
+//   * the 2160x2700 capture is saved directly without resampling or grain
 //   * the intermediate PNG is encoded with Chromium's fast encoder (lossless, same pixels)
 
 const http = require('http');
@@ -29,6 +29,8 @@ const crypto = require('crypto');
 const { leagueAccents } = require('./league-accents.js');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { leagueLogoSize } = require('./league-logo-sizing.js');
+const { competitionLabel, applyMatchPresentation, fitMatchComposition } = require('./match-presentation.js');
+const {alignBranding}=require('./branding-position.js');
 const { checkTemplateHtml, withCsp } = require('./template-check.js');
 const {expandPlaceholders}=require('./final-document.js');
 const {prepareCustomDocument}=require('./custom-resources.js');
@@ -132,9 +134,9 @@ const JPEG_QUALITY = 97;
 // benefit sufficient to justify adding noise across the entire Match image.
 const GRAIN_SIGMA = 0;
 
-// The 2160x2700 PNG is only an in-memory step. Set to true to also save it next to the JPEG
-// (slower, uses a lot of disk space).
-const KEEP_PNG = false;
+// Native lossless PNG is the primary Match deliverable. Keep the existing JPEG
+// response as a compatibility export for older API clients; bots prefer PNG.
+const KEEP_PNG = true;
 
 // League logo handling.
 // By default the template turns every league logo into a flat white silhouette (CSS filter).
@@ -386,7 +388,7 @@ const renderNews = require("./news-renderer.js")({
 });
 
 
-async function handleNewsRequest(req, res) {
+async function handleNewsRequest(req, res, signal) {
   const secret = process.env.NEWS_RENDER_SECRET;
   const supplied = req.headers["x-news-render-secret"];
 
@@ -486,7 +488,8 @@ async function handleNewsRequest(req, res) {
     const background = decodeImage(payload.background, true);
     const circle = decodeImage(payload.circle, false);
 
-    const result = await renderNews(job, background, circle);
+    signal?.throwIfAborted();
+    const result = await renderNews(job, background, circle,signal);
 
 
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -494,7 +497,8 @@ async function handleNewsRequest(req, res) {
   } catch (error) {
     console.error("[news render]", error.message);
 
-    res.writeHead(500, { "Content-Type": "application/json" });
+    if(res.destroyed)return;
+    res.writeHead(signal?.aborted?504:500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "News rendering failed" }));
   }
 }
@@ -520,13 +524,20 @@ const server = http.createServer(async (req,res) => {
   if(!security.authorized(req.headers)){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:'Unauthorized'}));return;}
   const complete=draining.begin();
   if(!complete){res.writeHead(503,{'content-type':'application/json','retry-after':'5'});res.end(JSON.stringify({error:'Renderer is draining'}));return;}
+  const controller=new AbortController();
+  const cancel=()=>{if(!res.writableFinished)controller.abort();};
+  req.once('aborted',cancel);res.once('close',cancel);
+  const deadline=setTimeout(()=>controller.abort(),110000);deadline.unref?.();
   let release;
   try{
     release=await renderGate.acquire();
+    controller.signal.throwIfAborted();
     if(req.destroyed)return;
-    if(req.url==='/render-news'){await handleNewsRequest(req,res);return;}
+    if(req.url==='/render-news'){await handleNewsRequest(req,res,controller.signal);return;}
     const body=await security.readBody(req,45*1024*1024);
     const d=security.validateMatch(JSON.parse(body));
+    if(d.output_format!==undefined&&!['png','jpeg','both'].includes(d.output_format))throw Object.assign(new Error('Invalid output format'),{statusCode:400});
+    const pngOnly=d.output_format==='png';
       const t0 = Date.now();
 
       // fixture_id ends up in file names: keep only safe characters
@@ -549,6 +560,7 @@ const server = http.createServer(async (req,res) => {
       // Decide how the league logo is shown (see LEAGUE_LOGO_DIR comment above)
       const leagueIdMatch = String(d.league_logo || '').match(/leagues\/(\d+)/);
       const leagueId = Number.isSafeInteger(d.league_id) && d.league_id > 0 ? d.league_id : leagueIdMatch ? Number(leagueIdMatch[1]) : null;
+      const leagueLabel = !isCustom ? competitionLabel(leagueId) : null;
       let leagueLogoSrc = d.league_logo;
       let leagueLogoClass = 'league-logo';
       let leagueLogoIsRemote = true;
@@ -569,7 +581,7 @@ const server = http.createServer(async (req,res) => {
       const [homeLogoSrc, awayLogoSrc, leagueLogoFinal] = await Promise.all([
         localizeImage(d.home_logo),
         localizeImage(d.away_logo),
-        leagueLogoIsRemote ? localizeImage(leagueLogoSrc) : leagueLogoSrc,
+        leagueLabel ? null : leagueLogoIsRemote ? localizeImage(leagueLogoSrc) : leagueLogoSrc,
       ]);
       const tLogos = Date.now();
 
@@ -617,6 +629,7 @@ const server = http.createServer(async (req,res) => {
       const leagueSize = !isCustom ? leagueLogoSize(leagueId) : null;
       const leagueSizeStyle = leagueSize ? ` style="width:${leagueSize.width}px;height:${leagueSize.height}px"` : '';
       html = html.replace('class="league-logo"', `class="${leagueLogoClass}"${leagueSizeStyle}`);
+      if (!isCustom) html = applyMatchPresentation(html, {leagueId, template:d.template || DEFAULT_TEMPLATE});
 
       // Last transformation: canonical checked bytes + immutable image manifest.
       // Never interpolate or otherwise mutate HTML after this boundary.
@@ -669,14 +682,17 @@ const server = http.createServer(async (req,res) => {
             if(isCustom) await guardPage(page, remoteOk, htmlPath, customManifest);
             await page.goto(pathToFileURL(htmlPath).href, { waitUntil: 'load', timeout: 60000 });
             await waitUntilReady(page);
+            if (!isCustom) await fitMatchComposition(page, d.template || DEFAULT_TEMPLATE);
+            await alignBranding(page);
             tPageReady = Date.now();
 
             // High-resolution intermediate (2160x2700), returned as a buffer (no disk write)
             return captureHiRes(page, context);
-          });
+          },undefined,controller.signal);
           await page.close().catch(() => {});
           break; // success
         } catch (err) {
+          if(controller.signal.aborted)throw err;
           console.warn(`[fixture ${fixtureId}] render attempt ${attempt}/${MAX_ATTEMPTS} failed: ${String(err.message).split('\n')[0]}`);
           if (page) await page.close().catch(() => {});
           // Only this request's page is closed; never reset a healthy shared browser here.
@@ -693,10 +709,11 @@ const server = http.createServer(async (req,res) => {
         );
       }
 
+      controller.signal.throwIfAborted();
       if (KEEP_PNG) fs.writeFileSync(pngPath, pngBuffer);
 
       // High-quality downscale 2160x2700 -> 1080x1350, sRGB JPEG for Instagram
-      fs.writeFileSync(jpgPath, await makeJpeg(pngBuffer));
+      if(!pngOnly)fs.writeFileSync(jpgPath, await makeJpeg(pngBuffer));
 
       const tDone = Date.now();
       const sec = (ms) => (ms / 1000).toFixed(1);
@@ -709,13 +726,14 @@ const server = http.createServer(async (req,res) => {
       res.end(JSON.stringify({
         html_path: htmlPath,
         png_path: KEEP_PNG ? pngPath : null,
-        jpg_path: jpgPath,
+        jpg_path: pngOnly ? null : jpgPath,
         background_info: backgroundInfo,
       }));
   }catch(err){
-    const status=err.statusCode??(err instanceof SyntaxError?400:500);
+    if(res.destroyed)return;
+    const status=controller.signal.aborted?504:err.statusCode??(err instanceof SyntaxError?400:500);
     res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify({error:status<500?'Render request rejected':'Rendering failed'}));
-  }finally{release?.();complete();}
+  }finally{clearTimeout(deadline);req.removeListener('aborted',cancel);res.removeListener('close',cancel);release?.();complete();}
 });
 server.requestTimeout=30000;
 server.headersTimeout=10000;
@@ -755,8 +773,9 @@ server.listen(PORT, '127.0.0.1', () => {
   if(draining.draining)return;
   warmUpPromise=(async () => {
     const t = Date.now();
-    let page;
+    let page,releaseWarmup;
     try {
+      releaseWarmup=await renderGate.acquire();
       const context = await getContext();
       page = await context.newPage();
       const png=await withPageDeadline(page,async()=>{
@@ -768,6 +787,6 @@ server.listen(PORT, '127.0.0.1', () => {
       console.log(`Warm-up done in ${((Date.now() - t) / 1000).toFixed(1)} s.`);
     } catch (e) {
       console.warn('Warm-up skipped:', String(e.message).split('\n')[0]);
-    }finally{if(page)await page.close().catch(()=>{});}
+    }finally{if(page)await page.close().catch(()=>{});releaseWarmup?.();}
   })();
 });

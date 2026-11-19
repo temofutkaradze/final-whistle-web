@@ -11,6 +11,23 @@ describe('additional News editorial designs',()=>{
     expect(html).toContain('border:3px solid');expect(html).toContain('height:3px;background:');expect(html).toContain('rgba(0,0,0,.92) 90%,#000 100%');expect(html).toContain('.frame #headline{font-size:68px;line-height:1.04;text-align:center}');expect(html).toContain('data-ready');expect(html).toContain(Buffer.from('unchanged-background').toString('base64'));
     expect(()=>buildHtml({...job,editorial:{...job.editorial!,headline:'x'.repeat(301)}},Buffer.from('photo'),null)).toThrow('Invalid editorial');
   });
+  for(const template of ['news-red','did-you-know'] as const)it('selects and renders both versions of '+template,()=>{
+    const now=4_000_000;
+    const choice=editorialTransition({text:EDITORIAL_TEMPLATES[template]},{background:'source',ts:now},now)!;
+    expect(choice.pending).toMatchObject({step:'version'});
+    expect(editorialTransition({text:'invalid'},choice.pending,now)).toHaveProperty('replyOptions');
+    for(const version of [1,2] as const){
+      const selected=editorialTransition({text:'Version '+version},choice.pending,now)!;
+      expect(selected.pending).toMatchObject({step:'headline',version});
+      const result=editorialTransition({text:'A *great* headline'},selected.pending,now)!;
+      expect(result).toHaveProperty('job.editorial.version',version);
+      if(!('job' in result)||!result.job)throw Error('Missing job');
+      const html=buildHtml(result.job,Buffer.from('source'),null);
+      expect(html).toContain('<span class="yellow">great</span>');
+      expect(html.includes('border-radius:2px;background:')).toBe(version===2);
+      if(version===2)expect(html).toContain(template==='news-red'?'#e8444b':'#e8c451');
+    }
+  });
   it('keeps standings, legacy text, cancel, expiration and replacement uploads available',()=>{
     const now=4_000_000,p={background:'source',ts:now};
     expect(editorialTransition({text:'Author | old workflow'},p,now)).toBeNull();

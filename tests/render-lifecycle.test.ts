@@ -33,6 +33,15 @@ it('a Match page deadline leaves concurrent News and subsequent Match work healt
  expect(bad.status).toBe(500);expect(good.status).toBe(200);const rendered=await output(good);expect(await sharp(readFileSync(rendered.image_path)).metadata()).toMatchObject({width:2160,height:2700,format:'png'});
  const recovered=await post('/render',match('recovered','RECOVERED'));expect(recovered.status).toBe(200);await output(recovered);expect(log).toContain('Render page deadline exceeded');expect(log).not.toContain('Shared browser was closed');
 });
+it('releases an abandoned request without closing the shared browser',async()=>{
+ const controller=new AbortController();
+ const request=fetch('http://127.0.0.1:'+port+'/render',{method:'POST',headers:auth,body:JSON.stringify(match('cancel','HANG_MATCH')),signal:controller.signal}).catch(error=>error);
+ const start=Date.now();while((await health()).inflight<1){if(Date.now()-start>3000)throw Error('Request not admitted');await pause(20);}
+ controller.abort();await request;
+ while((await health()).inflight!==0){if(Date.now()-start>3000)throw Error('Cancelled request did not release');await pause(20);}
+ const next=await post('/render',match('after_cancel','RECOVERED'));expect(next.status).toBe(200);await output(next);
+ expect(log).not.toContain('Shared browser was closed');
+});
 it('repeated shutdown requests drain active and queued Match/News jobs before browser closure',async()=>{
  const tasks=[post('/render',match('drain_a','DRAIN_MATCH')),post('/render',match('drain_b','DRAIN_MATCH')),post('/render',match('drain_c','DRAIN_MATCH')),post('/render-news',news())];
  const start=Date.now();while((await health()).inflight<4){if(Date.now()-start>3000)throw Error('Expected four admitted requests');await pause(20);}

@@ -60,6 +60,16 @@ describe('standings-only photo and crest preparation',()=>{
   });
 });
 describe('editorial standings layout contract',()=>{
+  it('uses a Match-style bottom shade while preserving the clear upper photo and compact panel geometry',async()=>{
+    for(const count of [3,4]){
+      const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable()})(39,Array.from({length:count},(_,i)=>i+1));
+      const html=buildStandingsHtml(job,Buffer.from('photo'));
+      expect(html).toContain('.shade{position:absolute;left:0;bottom:0;width:100%;height:810px;');
+      expect(html).toContain('rgba(0,0,0,.97) 0%,rgba(0,0,0,.90) 25%,rgba(0,0,0,.65) 55%,rgba(0,0,0,.20) 85%,rgba(0,0,0,0) 100%');
+      expect(html).toContain('.table{position:absolute;bottom:46px;left:54px;width:972px;');
+      expect(html).toContain('inset:0;border:2px solid transparent;border-radius:inherit');
+    }
+  });
   for(const league of [39,140,135,78,61,2])it('retains data and shared accents for league '+league,async()=>{
     const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable(league)})(league,[3,1,2]);
     const html=buildStandingsHtml(job,Buffer.from('photo'));

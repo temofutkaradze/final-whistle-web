@@ -40,7 +40,7 @@ const original=Module._load;
 Module._load=function(request,...rest){
   if(request==='playwright')return {chromium:{launch:async()=>newBrowser()}};
   const value=original.call(this,request,...rest);
-  if(request==='./operations.js'&&process.env.FW_TEST_PAGE_DEADLINE)return {...value,withPageDeadline:(page,work)=>value.withPageDeadline(page,work,Number(process.env.FW_TEST_PAGE_DEADLINE))};
+  if(request==='./operations.js'&&process.env.FW_TEST_PAGE_DEADLINE)return {...value,withPageDeadline:(page,work,_timeout,signal)=>value.withPageDeadline(page,work,Number(process.env.FW_TEST_PAGE_DEADLINE),signal)};
   if(request==='./security.js')return {...value,downloadPublicResource:async url=>{
     if(process.env.FW_DOWNLOAD_PROBE)fs.appendFileSync(process.env.FW_DOWNLOAD_PROBE,JSON.stringify(url)+'\n');
     if(url.includes('/singleflight-'))await pause(250);

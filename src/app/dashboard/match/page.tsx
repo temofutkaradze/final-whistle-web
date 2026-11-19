@@ -353,7 +353,21 @@ export default async function Dashboard({
   });
   if (!user) redirect("/login");
 
-  const approved = await approvedMatchUser(prisma,user.id);
+  let approved: Awaited<ReturnType<typeof approvedMatchUser>>;
+  try {
+    approved = await approvedMatchUser(prisma,user.id);
+  } catch (error) {
+    // A deployment/schema mismatch never grants legacy Telegram authorization.
+    const failure = error as {code?:string;meta?:{modelName?:string;table?:string}};
+    const missingBinding = failure?.code === "P2021" &&
+      (failure.meta?.modelName === "MatchTelegramBinding" ||
+       /^(?:public\.)?MatchTelegramBinding$/.test(String(failure.meta?.table ?? "").replaceAll('"', '')));
+    if (!missingBinding) throw error;
+    console.error("[Match] MATCH_PAIRING_SCHEMA_UNAVAILABLE");
+    return <div className="container"><BackToDashboard/><h1>Match Generator</h1>
+      <p className="notice error" role="alert">Match setup is temporarily unavailable. Your saved settings are preserved. Please contact the administrator.</p>
+    </div>;
+  }
   const chosenLeagues = new Set(user.subscriptions[0]?.leagueIds ?? []);
   const chosenTeams = new Set(user.favoriteTeams.map((f) => f.teamId));
   const allTeams = await prisma.team.findMany({ orderBy: { name: "asc" } });

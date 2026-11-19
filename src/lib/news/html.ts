@@ -6,6 +6,7 @@ import type { Job } from './parse';
 import { DEFAULT_NEWS_STYLE, normalizeNewsStyle } from './parse.ts';
 import { readFileSync } from 'node:fs';
 import {buildEditorialHtml} from './editorial-html.ts';
+import {buildBreakingHtml} from './breaking-html.ts';
 
 export const bundledFonts = ([['League Gothic','leaguegothic',400],['Anton','anton',400],['Montserrat','montserrat',800]] as const)
   .map(([family,file,weight]) => `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};src:url(data:font/ttf;base64,${readFileSync(new URL(`../../../render/fonts/${file}.ttf`,import.meta.url)).toString('base64')}) format('truetype');}`)
@@ -17,17 +18,18 @@ const triple = (t: number[], d: number[]) => d.map((fallback,index)=>t?.[index]=
 const sniff = (b: Buffer) => (b[0] === 0x89 && b[1] === 0x50 ? 'image/png' : b[0] === 0x52 && b[1] === 0x49 ? 'image/webp' : 'image/jpeg');
 const dataUri = (b: Buffer) => `data:${sniff(b)};base64,${b.toString('base64')}`;
 
-export function buildHtml(job: Job, bgBuf: Buffer, circleBuf: Buffer | null): string {
-  if(job.editorial)return buildEditorialHtml(job,dataUri(bgBuf),bundledFonts);
+export function buildHtml(job: Job, bgBuf: Buffer, circleBuf: Buffer | null, imageSource:(bytes:Buffer)=>string=dataUri): string {
+  if(job.layout==='breaking'&&typeof job.breakingText==='boolean')return buildBreakingHtml(job,imageSource(bgBuf),bundledFonts);
+  if(job.editorial)return buildEditorialHtml(job,imageSource(bgBuf),bundledFonts);
   const style = normalizeNewsStyle(job.style);
-  const bgSrc = dataUri(bgBuf);
+  const bgSrc = imageSource(bgBuf);
   const meta = {
     layout: job.layout,
     quote: job.quote,
     author: job.author,
     pos: { b: triple(job.pos.b, [50, 50, 1]), c: triple(job.pos.c, [50, 30, 1]) },
   };
-  const circle = meta.layout !== 'single' && meta.layout !== 'breaking' && circleBuf ? dataUri(circleBuf) : null;
+  const circle = meta.layout !== 'single' && meta.layout !== 'breaking' && circleBuf ? imageSource(circleBuf) : null;
 
   const parts = meta.quote.split('*');
   const quoteHtml = parts.map((p, i) => (i % 2 ? '<span class="y">' + esc(p) + '</span>' : esc(p))).join('');

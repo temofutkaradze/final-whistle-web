@@ -98,6 +98,14 @@ afterAll(() => {
 });
 
 describe("render server (fake Chromium)", () => {
+  it('skips JPEG for PNG-only requests without changing native PNG pixels',async()=>{
+    const normal=await post(base('png_compare'));
+    const png=await post(base('png_compare',{output_format:'png'}));
+    expect(png.status).toBe(200);expect(png.json.jpg_path).toBeNull();
+    expect(await sharp(png.json.png_path).metadata()).toMatchObject({width:2160,height:2700,format:'png'});
+    expect(readFileSync(png.json.png_path)).toEqual(readFileSync(normal.json.png_path));
+    expect(existsSync(png.json.png_path.replace(/\.png$/,'.jpg'))).toBe(false);
+  });
   it("draws each built-in template as a 1080x1350 JPEG", async () => {
     for (const t of ["classic", "panel", "frame", "stripe"]) {
       const r = await post(base(`t_${t}`, { template: t }));
@@ -279,7 +287,7 @@ describe("render server (fake Chromium)", () => {
     const news=fetch('http://127.0.0.1:'+port+'/render-news',{method:'POST',headers:{'x-news-render-secret':'isolated-match-render-test'},body:JSON.stringify({job:{layout:'single',quote:'NEWS',author:'AUTHOR',caption:'',pos:{b:[50,50,1],c:[50,30,1]}},background:img,circle:null})});
     const match=post(base('retry_'+failure,{home_team:failure}));
     const [n,m]=await Promise.all([news,match]);expect(m.status).toBe(failure==='FAIL_MATCH_ONCE'?200:500);expect(n.status).toBe(200);
-    const output=await n.json();expect((await sharp(output.jpg_path).metadata()).width).toBe(1080);rmSync(output.jpg_path);
+    const output=await n.json();expect(await sharp(output.png_path).metadata()).toMatchObject({width:2160,height:2700,format:'png'});rmSync(output.png_path);
   });
   it('isolates HTML and JPEG paths for overlapping requests with the same fixture ID',async()=>{
     const [a,b]=await Promise.all([post(base('same_id',{home_team:'CONCURRENT_ALPHA'})),post(base('same_id',{home_team:'CONCURRENT_BETA'}))]);
@@ -380,4 +388,12 @@ it("cleanup removes only owned files and preserves lifecycle and unrelated outpu
   } finally {
     rmSync(dir, { recursive: true, force: true }); // Only this test's mkdtemp directory.
   }
+});
+
+it("limits cleanup to renderer-server files without touching parallel lifecycle outputs", () => {
+  expect(ownsOutput("vitest_server_t_classic_uuid.jpg")).toBe(true);
+  expect(ownsOutput("vitest_server_probe.json")).toBe(true);
+  expect(ownsOutput("vitest_lifecycle_drain_a_uuid.jpg")).toBe(false);
+  expect(ownsOutput("news_1234.jpg")).toBe(false);
+  expect(ownsOutput("customer-post.jpg")).toBe(false);
 });

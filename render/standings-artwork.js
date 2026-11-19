@@ -1,6 +1,11 @@
 // Standings-only image preparation. No network, AI or decorative image copies.
 const sharp=require('sharp');
 const {validateMatchImage}=require('./security.js');
+const {createHash}=require('node:crypto');
+const {createSingleFlight}=require('./operations.js');
+const crests=new Map(),inflight=createSingleFlight();
+let cachedBytes=0;
+const MAX_CACHE_BYTES=4*1024*1024,MAX_CACHE_ENTRIES=32;
 async function prepareStandingsBackground(bytes,metadata){
   const verified=await validateMatchImage(bytes);
   if(!['jpeg','png','webp'].includes(verified.format)||verified.pages!==1)throw Error('Animated or unsupported standings photograph');
@@ -11,6 +16,22 @@ async function prepareStandingsBackground(bytes,metadata){
   return {primary};
 }
 async function normalizeStandingsCrest(bytes){
+  const key=createHash('sha256').update(bytes).digest('hex');
+  let result=crests.get(key);
+  if(result){crests.delete(key);crests.set(key,result);}
+  else result=await inflight.run(key,async()=>{
+    const value=await prepareCrest(bytes);
+    if(value.png.length<=MAX_CACHE_BYTES){
+      while(crests.size&&(crests.size>=MAX_CACHE_ENTRIES||cachedBytes+value.png.length>MAX_CACHE_BYTES)){
+        const oldest=crests.keys().next().value;cachedBytes-=crests.get(oldest).png.length;crests.delete(oldest);
+      }
+      crests.set(key,value);cachedBytes+=value.png.length;
+    }
+    return value;
+  });
+  return {png:Buffer.from(result.png),lightBacking:result.lightBacking};
+}
+async function prepareCrest(bytes){
   const {data,info}=await sharp(bytes,{limitInputPixels:1024*1024}).rotate()
     .toColourspace('srgb').ensureAlpha().raw().toBuffer({resolveWithObject:true});
   let left=info.width,top=info.height,right=-1,bottom=-1,painted=0,darkNeutral=0;

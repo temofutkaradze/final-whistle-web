@@ -73,7 +73,10 @@ export function normalizeNewsStyle(value: unknown): NewsStyle {
 // What the user types in Telegram -> a "job". (n8n node: Parse Message, text part)
 export type Triple = [number, number, number];
 export interface Job {
-  editorial?: {template:import('./editorial.ts').EditorialTemplate;headline:string;subtitle:string};
+  branding?: boolean;
+  brandingOnly?: boolean;
+  breakingText?: boolean;
+  editorial?: {template:import('./editorial.ts').EditorialTemplate;version?:1|2;headline:string;subtitle:string};
   layout: 'single' | 'left' | 'right' | 'breaking';
   author: string;
   quote: string;

@@ -1,14 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import {downloadPublicResource,renderHeaders} from "../../render/security.js";
+import {renderHeaders} from "../../render/security.js";
 import { logoDataUri } from "@/lib/logos";
 
 // Where the local render server (render-server.js) listens.
 const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://127.0.0.1:4500/render";
-
-// Customer backgrounds are downloaded here (inside this project).
-const BACKGROUND_DIR = path.join(process.cwd(), "storage", "backgrounds");
-const MAX_BACKGROUND_BYTES = 15 * 1024 * 1024;
 
 import { pageNameForImage, sampleMatchFields } from "@/lib/sample-match";
 
@@ -20,18 +14,8 @@ export { pageNameForImage };
 // images only, size limit). Tighten this before accepting real customers.
 // ---------------------------------------------------------------------------
 
-export async function downloadBackground(brandId: string, url: string): Promise<string | null> {
-  if(!/^[A-Za-z0-9_-]{1,128}$/.test(brandId))throw new Error("Invalid background ID");
-  const resource=await downloadPublicResource(url,{maxBytes:MAX_BACKGROUND_BYTES,timeoutMs:15000});
-  const type=resource.contentType;
-  const ext=type.includes('png')?'png':type.includes('webp')?'webp':type.includes('jpeg')||type.includes('jpg')?'jpg':null;
-  if(!ext)throw new Error('Background must be a PNG, JPEG or WebP image.');
-  const buf=resource.body;
-  await mkdir(BACKGROUND_DIR, { recursive: true });
-  const file = path.join(BACKGROUND_DIR, `${brandId}.${ext}`);
-  await writeFile(file, buf);
-  return file;
-}
+import {downloadBackground} from "../../scripts/lib/background-download.mjs";
+export {downloadBackground};
 
 // ---------------------------------------------------------------------------
 // The look of a customer's posts: which template, and the page name or the page logo.
@@ -70,6 +54,7 @@ export async function renderSamplePost(brand: BrandLook & {
 
   const payload = {
     ...sample,
+    output_format: 'png',
     fixture_id: `sample_${brand.id}`,
     ...(await brandLookFields(brand)),
     ...(templateHtml ? { template: "classic", template_html: templateHtml } : {}),
@@ -83,9 +68,9 @@ export async function renderSamplePost(brand: BrandLook & {
     signal: AbortSignal.timeout(120000),
   });
 
-  const data = (await res.json().catch(() => ({}))) as { jpg_path?: string; error?: string };
-  if (!res.ok || !data.jpg_path) {
+  const data = (await res.json().catch(() => ({}))) as { png_path?:string; jpg_path?: string; error?: string };
+  if (!res.ok || typeof data.png_path!=='string'||!data.png_path.toLowerCase().endsWith('.png')) {
     throw new Error(data.error ?? `Render server answered with HTTP ${res.status}`);
   }
-  return data.jpg_path;
+  return data.png_path;
 }

@@ -1,10 +1,10 @@
-import { mkdir, writeFile, access, readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import {downloadPublicResource,renderHeaders} from "../../render/security.js";
+import {renderHeaders} from "../../render/security.js";
 
 const RENDER_URL = process.env.RENDER_SERVER_URL ?? "http://127.0.0.1:4500/render";
 
-export const BACKGROUND_DIR = path.join(process.cwd(), "storage", "backgrounds");
+export {BACKGROUND_DIR,downloadBackground} from "./background-download.mjs";
 
 const svgUri = (svg) => "data:image/svg+xml;utf8," + encodeURIComponent(svg);
 
@@ -59,28 +59,15 @@ export async function fileExists(p) {
 }
 
 // Demo-level safe download of a background from a URL (http(s) only, no local hosts, images only).
-export async function downloadBackground(brandId, url) {
-  if(!/^[A-Za-z0-9_-]{1,128}$/.test(brandId))throw new Error("Invalid background ID");
-  const resource=await downloadPublicResource(url,{maxBytes:15*1024*1024,timeoutMs:15000});
-  const type=resource.contentType;
-  const ext=type.includes('png')?'png':type.includes('webp')?'webp':type.includes('jpeg')||type.includes('jpg')?'jpg':null;
-  if(!ext)throw new Error('Background must be a PNG, JPEG or WebP image.');
-  const buf=resource.body;
-  await mkdir(BACKGROUND_DIR, { recursive: true });
-  const file = path.join(BACKGROUND_DIR, `${brandId}.${ext}`);
-  await writeFile(file, buf);
-  return file;
-}
-
 export async function renderPost(payload) {
   const res = await fetch(RENDER_URL, {
     method: "POST",
     headers: renderHeaders(),
-    body: JSON.stringify(payload),
+    body: JSON.stringify({...payload,output_format:'png'}),
     signal: AbortSignal.timeout(120000),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Render server answered with HTTP ${res.status}`);
-  if (!data.jpg_path) throw new Error(data.error ?? "Render server returned no JPG");
-  return data.jpg_path;
+  if (typeof data.png_path!=='string'||!data.png_path.toLowerCase().endsWith('.png')) throw new Error('Match renderer must return a lossless PNG');
+  return data.png_path;
 }

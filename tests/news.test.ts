@@ -18,7 +18,7 @@ function fixture(linked = true) {
     Object.assign(settings,data);return {count:1};
   })};
   const config={...DEFAULT_NEWS_STYLE,accent:'#123456',textSize:80};
-  const tg={sendMessage:vi.fn(async()=>({ok:true})),sendDocument:vi.fn(async()=>{})};
+  const tg={sendMessage:vi.fn(async(..._args:unknown[])=>({ok:true})),sendDocument:vi.fn(async()=>{})};
   const render=vi.fn(async(..._args:unknown[])=>'/fake/news.png');
   const diagnostic=vi.fn();
   const handle=createNewsHandler({prisma:{newsSettings:table,newsTemplate:{findFirst:vi.fn(async()=>({config}))}},tg,ownerId:'owner',connectionToken:settings.botToken,download:vi.fn(async()=>Buffer.from('image')),render,cleanup:vi.fn(async()=>{}),now:()=>now,onDiagnostic:diagnostic});
@@ -54,31 +54,60 @@ describe('News original conversation',()=>{
 });
 
 describe('News bot integration with mocked Telegram and persistence',()=>{
+  it.each([1,3])('returns %s Branding photos after one selection',async count=>{
+    const f=fixture();
+    for(let i=0;i<count;i++)await f.handle(f.update(i+1,{photo:[{file_id:`photo-${i}`}],...(count>1?{media_group_id:'album'}:{})}));
+    await f.handle(f.update(count+1,{text:'Branding'}));
+    expect(f.render).toHaveBeenCalledTimes(count);
+    for(const call of f.render.mock.calls)expect(call[0]).toMatchObject({brandingOnly:true,branding:true,quote:'',author:''});
+    expect(f.tg.sendDocument).toHaveBeenCalledTimes(count);
+    expect(f.settings.pending.stage).toBe('delivered');
+    expect(f.diagnostic).not.toHaveBeenCalled();
+  });
+  it('reports a Branding render failure instead of silently leaving the user waiting',async()=>{
+    const f=fixture();await f.handle(f.update(1,photo));
+    f.render.mockRejectedValueOnce(new Error('render failed'));
+    await f.handle(f.update(2,{text:'Branding'}));
+    expect(f.tg.sendMessage.mock.calls.at(-1)?.[1]).toContain('branded photo could not be completed');
+    expect(f.tg.sendDocument).not.toHaveBeenCalled();
+  });
+  for(const withText of [false,true])it('Breaking '+(withText?'Yes':'No')+' uses the selected background and PNG document flow',async()=>{
+    const f=fixture();await f.handle(f.update(1,photo));await f.handle(f.update(2,{text:'Breaking'}));
+    expect(f.tg.sendMessage.mock.calls.at(-1)).toMatchObject(['42','Do you want to add text?',{reply_markup:{keyboard:[[{text:'Yes'},{text:'No'}]]}}]);
+    await f.handle(f.update(3,{text:withText?'Yes':'No'}));
+    if(withText){expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(4,{text:'A *NEW CHAPTER* BEGINS'}));}
+    expect(f.render).not.toHaveBeenCalled();expect(f.tg.sendMessage.mock.calls.at(-1)?.[1]).toBe('Add branding?');await f.handle(f.update(5,{text:'Yes'}));
+    expect(f.render).toHaveBeenCalledOnce();expect(f.render.mock.calls[0][0]).toMatchObject({branding:true,layout:'breaking',breakingText:withText,quote:withText?'A *NEW CHAPTER* BEGINS':'',author:''});expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.png','','news-post.png');
+  });
   it('Quotes button resumes the complete original circle, author, crop, caption and styling workflow',async()=>{
     const f=fixture();await f.handle(f.update(1,photo));
     expect(f.tg.sendMessage.mock.calls[0]).toMatchObject(['42',expect.any(String),{reply_markup:{keyboard:expect.arrayContaining([[{text:'Quotes'}]])}}]);
     await f.handle(f.update(2,{text:'Quotes'}));expect(f.settings.pending).toMatchObject({background:'background',circle:null});expect(f.render).not.toHaveBeenCalled();
     await f.handle(f.update(3,{document:{file_id:'circle-original',mime_type:'image/png'}}));
     await f.handle(f.update(4,{text:'R: Original Author | A *yellow* quote [b:40,55,1.2] [c:60,20,1.3] || Original caption'}));
+    await f.handle(f.update(5,{text:'No'}));
     const job=f.render.mock.calls[0][0];expect(job).toMatchObject({layout:'right',author:'Original Author',quote:'A *yellow* quote',caption:'Original caption',pos:{b:[40,55,1.2],c:[60,20,1.3]},style:expect.objectContaining({accent:f.config.accent,textSize:80})});
     expect(job).not.toHaveProperty('editorial');expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.png','Original caption','news-post.png');
   });
   for(const label of ['Headline + Subtitle','Large Headline','NEWS (Red)','DID YOU KNOW (Yellow)'])it('adds '+label+' without replacing the legacy conversation',async()=>{
     const f=fixture();await f.handle(f.update(1,{document:{file_id:'full-quality-background',file_name:'photo.webp',mime_type:'application/octet-stream'}}));
     expect(f.tg.sendMessage.mock.calls[0]).toMatchObject(['42',expect.any(String),{reply_markup:{keyboard:expect.arrayContaining([[{text:label}]]),resize_keyboard:true,one_time_keyboard:true}}]);
-    await f.handle(f.update(2,{text:label}));expect(f.settings.pending.step).toBe('headline');
-    await f.handle(f.update(3,{text:'THE *NEXT\nCHAPTER*'}));
-    if(label==='Headline + Subtitle'){expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(4,{text:'An editable *subtitle*'}));}
-    expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0][0]).toMatchObject({layout:'single',quote:'THE *NEXT\nCHAPTER*',editorial:{headline:'THE *NEXT\nCHAPTER*',subtitle:label==='Headline + Subtitle'?'An editable *subtitle*':''}});
+    await f.handle(f.update(2,{text:label}));
+    if(label==='NEWS (Red)'||label==='DID YOU KNOW (Yellow)'){expect(f.settings.pending.step).toBe('version');await f.handle(f.update(3,{text:'Version 1'}));}
+    expect(f.settings.pending.step).toBe('headline');
+    await f.handle(f.update(4,{text:'THE *NEXT\nCHAPTER*'}));
+    if(label==='Headline + Subtitle'){expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(5,{text:'An editable *subtitle*'}));}
+    expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(6,{text:'No'}));
+    expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0][0]).toMatchObject({branding:false,layout:'single',quote:'THE *NEXT\nCHAPTER*',editorial:{headline:'THE *NEXT\nCHAPTER*',subtitle:label==='Headline + Subtitle'?'An editable *subtitle*':''}});
     expect(f.tg.sendDocument).toHaveBeenCalledOnce();expect(f.settings.pending.stage).toBe('delivered');
   });
   it('renders once, applies saved styling, sends a JPG document, and needs no /start per post',async()=>{
     const f=fixture();await f.handle(f.update(1,photo));
-    const text=f.update(2,{text:'Author | News'});await f.handle(text);await f.handle(text);
+    const text=f.update(2,{text:'Author | News'});await f.handle(text);await f.handle(text);await f.handle(f.update(3,{text:'No'}));
     expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0]).toEqual([expect.objectContaining({layout:'single',style:expect.objectContaining({accent:f.config.accent,textSize:80})}),expect.any(Buffer),null]);
     expect(f.tg.sendDocument).toHaveBeenCalledExactlyOnceWith('42','/fake/news.png','','news-post.png');
     expect(f.settings.pending.stage).toBe('delivered');
-    await f.handle(f.update(3,photo));await f.handle(f.update(4,{text:'Next | Story'}));expect(f.render).toHaveBeenCalledTimes(2);
+    await f.handle(f.update(4,photo));await f.handle(f.update(5,{text:'Next | Story'}));await f.handle(f.update(6,{text:'Yes'}));expect(f.render).toHaveBeenCalledTimes(2);
   });
   it('rejects another private chat before downloading or rendering',async()=>{
     const f=fixture();await f.handle(f.update(1,photo,99));expect(f.render).not.toHaveBeenCalled();expect(f.tg.sendDocument).not.toHaveBeenCalled();
@@ -93,8 +122,8 @@ describe('News bot integration with mocked Telegram and persistence',()=>{
   });
   it('does not retry or send contradictory messages after renderer authentication fails',async()=>{
     const f=fixture();f.render.mockRejectedValueOnce(Object.assign(new Error('hidden'),{code:'NEWS_RENDER_AUTH'}));await f.handle(f.update(1,photo));
-    const request=f.update(2,{text:'Author | News'});await f.handle(request);await f.handle(request);
-    expect(f.render).toHaveBeenCalledTimes(1);expect(f.tg.sendDocument).not.toHaveBeenCalled();expect(f.tg.sendMessage).toHaveBeenCalledTimes(1);expect(f.diagnostic).toHaveBeenCalledWith({code:'NEWS_RENDER_AUTH',phase:'render',updateId:2});
+    const request=f.update(2,{text:'Author | News'});await f.handle(request);await f.handle(request);await f.handle(f.update(3,{text:'No'}));
+    expect(f.render).toHaveBeenCalledTimes(1);expect(f.tg.sendDocument).not.toHaveBeenCalled();expect(f.tg.sendMessage).toHaveBeenCalledTimes(2);expect(f.diagnostic).toHaveBeenCalledWith({code:'NEWS_RENDER_AUTH',phase:'render',updateId:3});
   });
   it('blocks polling when a webhook exists without changing it',async()=>{
     const api=vi.fn(async(method:string)=>({ok:true,result:method==='getWebhookInfo'?{url:'https://example.test/webhook'}:{id:1}}));

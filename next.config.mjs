@@ -38,8 +38,8 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false, // do not announce "X-Powered-By: Next.js"
+  experimental: { agentUpgrade: 'security', serverActions: { bodySizeLimit: "6mb" } },
   // The logo upload (up to 5 MB) is sent with a dashboard form.
-  experimental: { serverActions: { bodySizeLimit: "6mb" } },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

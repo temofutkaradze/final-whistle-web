@@ -126,6 +126,7 @@ async function loadDay(date) {
 
   const fixtures = await apiGet("fixtures", { date }); // "date" is a UTC day
   const wanted = fixtures.filter((f) => FAVORITE_LEAGUES.has(f.league.id) && !["PST", "CANC"].includes(f.fixture.status.short));
+  const storedTeams=new Set();
 
   for (const f of wanted) {
     const data = {
@@ -147,11 +148,13 @@ async function loadDay(date) {
     await prisma.match.upsert({ where: { fixtureId: f.fixture.id }, create: { fixtureId: f.fixture.id, ...data }, update: data });
     // Remember the clubs, so customers can pick them on the dashboard (never overwrite an existing row).
     for (const t of [f.teams.home, f.teams.away]) {
+      if(storedTeams.has(t.id))continue;
       await prisma.team.upsert({
         where: { id: t.id },
         create: { id: t.id, name: t.name, logo: t.logo, leagueId: f.league.id },
         update: {},
       });
+      storedTeams.add(t.id);
     }
   }
   await prisma.fixtureDay.upsert({ where: { date: key }, create: { date: key }, update: { fetchedAt: new Date() } });

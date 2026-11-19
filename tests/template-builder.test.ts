@@ -77,7 +77,8 @@ describe("template builder", () => {
     }
   });
 
-  it("600 pseudo-random combinations work (fixed seed, so a failure can be repeated)", () => {
+  // Keep the same 600 seeded inputs, but bound each test case instead of extending its timeout.
+  it.each([0, 1, 2, 3, 4, 5])("600 seeded combinations: batch %i (100 combinations)", (batch) => {
     let seed = 20261027;
     const rnd = () => {
       seed = (seed + 0x6d2b79f5) | 0;
@@ -97,7 +98,7 @@ describe("template builder", () => {
         leagueSpot: pick(LEAGUE_SPOTS), showNames: rnd() > 0.5, showEvents: rnd() > 0.5, eventsSize: pick(SIZES), eventsDivider: rnd() > 0.5,
         brand: pick(BRAND_SPOTS), brandSize: pick(SIZES),
       };
-      expectGood(cfg, `random #${i}: ${JSON.stringify(cfg)}`);
+      if (Math.floor(i / 100) === batch) expectGood(cfg, `random #${i}: ${JSON.stringify(cfg)}`);
     }
   });
 

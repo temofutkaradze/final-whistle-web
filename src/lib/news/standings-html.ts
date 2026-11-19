@@ -30,6 +30,8 @@ export function buildStandingsHtml(job:StandingsJob,background:Buffer,crestBacki
   const accent=leagueAccents(t.leagueId);
   const {rowHeight,font,headerHeight,bottom,padding}=standingsGeometry(t.rows.length);
   const {backgroundX,backgroundY,panelOffset}=standingsComposition(job.composition);
+  // Match-style bottom shade: begin well above the panel, keep the upper photo clear.
+  const shadeHeight=Math.min(1350,Math.max(810,rowHeight*t.rows.length+headerHeight+padding+bottom+panelOffset+240));
   const kicker=t.source.includes('FICTIONAL')?'LEAGUE TABLE / FICTIONAL PREVIEW':'LEAGUE TABLE';
   const logo=symbols.get(t.leagueId)??image(Buffer.from(t.leagueLogo,'base64'));
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>
@@ -37,7 +39,7 @@ export function buildStandingsHtml(job:StandingsJob,background:Buffer,crestBacki
   *{box-sizing:border-box}html,body{margin:0;width:2160px;height:2700px;overflow:hidden}
   .post{position:relative;width:1080px;height:1350px;transform:scale(2);transform-origin:top left;font-family:Montserrat,Arial,sans-serif;color:#f8fafc;background:#17212a;overflow:hidden}
   .background{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:${backgroundX}% ${backgroundY}%}
-  .shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(4,9,14,0) 48%,rgba(4,9,14,.10) 70%,rgba(4,9,14,.62) 100%)}
+  .shade{position:absolute;left:0;bottom:0;width:100%;height:${shadeHeight}px;background:linear-gradient(to top,rgba(0,0,0,.97) 0%,rgba(0,0,0,.90) 25%,rgba(0,0,0,.65) 55%,rgba(0,0,0,.20) 85%,rgba(0,0,0,0) 100%)}
   .table{position:absolute;bottom:${bottom+panelOffset}px;left:54px;width:972px;border-radius:14px;padding-bottom:${padding}px;overflow:hidden;background:linear-gradient(135deg,rgba(9,17,26,.87),rgba(5,12,20,.78));box-shadow:0 16px 48px rgba(0,0,0,.18)}
   .accent{height:2px}
   .table:after{content:'';position:absolute;inset:0;border:2px solid transparent;border-radius:inherit;background:${accent.left} border-box;mask:linear-gradient(#fff 0 0) padding-box,linear-gradient(#fff 0 0);mask-composite:exclude;opacity:.85;pointer-events:none}

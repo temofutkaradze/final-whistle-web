@@ -42,3 +42,26 @@ describe('expensive sample admission',()=>{
   const release=vi.fn();vi.spyOn(matchSampleAdmission,'acquire').mockReturnValue(release);mocks.render.mockRejectedValueOnce(new Error('render unavailable'));const sample=await action('Send a sample post');await expect(sample(new FormData())).rejects.toMatchObject({destination:'/dashboard/match?sample=fail'});expect(release).toHaveBeenCalledOnce();expect(mocks.sendDocument).not.toHaveBeenCalled();
  });
 });
+
+describe('missing pairing schema fails closed',()=>{
+ it('shows an unavailable notice with no forms or Telegram delivery for the missing binding table',async()=>{
+  const logged=vi.spyOn(console,'error').mockImplementation(()=>{});
+  mocks.approved.mockRejectedValueOnce({code:'P2021',meta:{modelName:'MatchTelegramBinding'}});
+  const tree=await Dashboard({searchParams:Promise.resolve({})});
+  const text=JSON.stringify(tree);
+  expect(text).toContain('Match setup is temporarily unavailable');
+  expect(findAction(tree,'Send a test message')).toBeUndefined();
+  expect(findAction(tree,'Send a sample post')).toBeUndefined();
+  expect(mocks.sendMessage).not.toHaveBeenCalled();expect(mocks.sendDocument).not.toHaveBeenCalled();expect(mocks.render).not.toHaveBeenCalled();
+  expect(logged).toHaveBeenCalledWith('[Match] MATCH_PAIRING_SCHEMA_UNAVAILABLE');
+ });
+ it('recognizes the exact qualified missing table but does not swallow other database failures',async()=>{
+  vi.spyOn(console,'error').mockImplementation(()=>{});
+  mocks.approved.mockRejectedValueOnce({code:'P2021',meta:{table:'public.MatchTelegramBinding'}});
+  expect(JSON.stringify(await Dashboard({searchParams:Promise.resolve({})}))).toContain('temporarily unavailable');
+  for(const error of [{code:'P2021',meta:{modelName:'User'}},{code:'P1001'},new Error('unexpected')]){
+   mocks.approved.mockRejectedValueOnce(error);
+   await expect(Dashboard({searchParams:Promise.resolve({})})).rejects.toBe(error);
+  }
+ });
+});

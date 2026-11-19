@@ -13,6 +13,9 @@ describe('website Telegram deadlines without retries',()=>{
    const document=body.get('document') as File;
    expect(document.type).toBe(suffix==='png'?'image/png':'image/jpeg');expect(document.name).toBe('news-post.'+suffix);
    expect(Buffer.from(await document.arrayBuffer())).toEqual(Buffer.from('jpg'));
+   await sendDocument('1','/fake/post.'+suffix,'caption','fake');
+   const website=((fetcher.mock.calls.at(-1)![1] as RequestInit).body as FormData).get('document') as File;
+   expect(website.type).toBe(document.type);expect(Buffer.from(await website.arrayBuffer())).toEqual(Buffer.from('jpg'));
   }
  });
  it('identifies document read failures before any Telegram dispatch',async()=>{
