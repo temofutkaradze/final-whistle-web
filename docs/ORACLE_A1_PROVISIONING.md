@@ -405,3 +405,72 @@ failed for required missing evidence; that is not proof of a provisioning/softwa
 failure or a green eligibility result. No LaunchInstance or Issue write was made.
 The observed enable variable remains false. A merge of this audit enhancement
 would not enable provisioning or resolve the listed billing prerequisites.
+
+
+## Optional read-only API-key owner diagnostic
+
+This diagnostic emits exactly one result: `MATCH`, `MISMATCH`, or `UNVERIFIED`.
+It never prints identifiers, fingerprints, private keys, digests, API responses or
+exception bodies. It is a separate step of the existing read-only audit job and
+cannot authorize provisioning, change Issue #11 or replace any billing/IAM guard.
+The 10-minute cron and provisioning enable gate are unchanged. No new repository
+variable or secret is required or automatically changed.
+
+### Explicit expected identity (do not guess)
+
+1. In Oracle Console, open Identity & Security > Domains > the intended domain >
+   Users > the intended automation API-key owner. Open API keys. Independently
+   verify the intended USER identifier and the fingerprint of the registered key
+   associated with the existing Actions credential. Do not use the tenancy
+   identifier, a username, or a different administrator's key. Do not copy the
+   private key, export credentials, or paste raw values into GitHub inputs/issues.
+2. In a trusted local checkout of this PR, run the following offline command. Both
+   prompts use hidden input; the only output is a domain-separated SHA-256 digest.
+   The helper strips surrounding whitespace and lowercases the colon-separated
+   fingerprint; it preserves user-identifier case. It performs no Oracle calls
+   and reads no environment files. Use values independently verified in Console,
+   not values inferred from the GitHub secrets being tested.
+
+   ```powershell
+   python -B -c "import sys,getpass; sys.path.insert(0,'scripts/oci'); from audit_identity import identity_digest; print(identity_digest(getpass.getpass('Expected API-key owner identifier: '), getpass.getpass('Expected registered fingerprint: ')))"
+   ```
+
+   If hidden input is unavailable, stop and use a normal trusted terminal; never
+   fall back to typing identifiers in command arguments or a recorded shell.
+   Treat even the digest as identity metadata; do not publish it in PRs or logs.
+3. GitHub > Actions > Oracle A1 workflow > Run workflow: select this PR's branch,
+   set `audit_only=true`, and paste ONLY that digest into
+   `expected_identity_sha256`. Keep provisioning disabled. Do not enter raw
+   identifiers, a fingerprint or private key. On scheduled runs or dispatches
+   without an expected digest, this step emits `UNVERIFIED` without an OCI call.
+
+### Interpretation and safety boundary
+
+- `MATCH`: both configured user/fingerprint match the explicitly supplied digest;
+  signed `GetUser` and `ListApiKeys` requests succeeded; the returned user is
+  ACTIVE with the exact identifier and the matching key is registered to it.
+  This proves the checked identity/key association at read time, not subscription
+  entitlement, group membership, policy effectiveness or future resource cost.
+- `MISMATCH`: well-formed configured identity differs from the expected digest,
+  or complete authoritative reads show a different owner/missing registered key.
+  No individual identifier or comparison component is disclosed. Recheck the
+  intended Console owner/key privately before deciding whether any secret update
+  is needed; the workflow never changes credentials.
+- `UNVERIFIED`: expected digest/credentials absent or malformed; read denied,
+  authentication failed, timeout, SDK unavailable, inactive/malformed user,
+  duplicate/ambiguous keys or incomplete response. This is NOT a mismatch or
+  evidence that the owner belongs to the intended policy group.
+
+Only two fixed read-only Identity methods are available to this helper. Reads
+have bounded timeouts, no automatic retries, and reject incomplete results. The
+API documents at most three keys per user; larger/duplicate results fail closed.
+Oracle documents own-user `ListApiKeys` access without a new administrator grant;
+this change does not add policies or request broad user-management permissions.
+If either read is unavailable, retain `UNVERIFIED` and diagnose privately rather
+than weakening the comparison or expanding privileges automatically.
+
+References: [Identity SDK](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/identity/client/oci.identity.IdentityClient.html),
+[own-user key listing](https://docs.oracle.com/en-us/iaas/tools/ruby/latest/OCI/Identity/IdentityClient.html#list_api_keys-instance_method).
+No expected real identity was supplied with this change, so live MATCH is not
+claimed. Mocked tests cover all three results, no-read behavior, response/error
+redaction, strict response bounds, fixed read methods and workflow isolation.
