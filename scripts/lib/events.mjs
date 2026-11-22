@@ -97,35 +97,33 @@ function isCountedGoal(ev) {
         && !isMissedPenalty(ev);
 }
 
-function isYellowCard(ev) {
-    return norm(ev.type) === 'card' && norm(ev.detail) === 'yellow card';
-}
+const SECOND_YELLOW_RE = /(?:second|2nd)[\s-]*yellow|yellow[\s/-]*red/;
 
-const SECOND_YELLOW_RE = /second yellow|2nd yellow|yellow.?red/;
+function cardDescription(ev) {
+    return norm(`${ev.detail ?? ''} ${ev.comments ?? ''}`);
+}
 
 function isRedCardEvent(ev) {
     if (norm(ev.type) !== 'card') return false;
     const d = norm(ev.detail);
-    return d.includes('red') || SECOND_YELLOW_RE.test(d);
+    return d.includes('red') || SECOND_YELLOW_RE.test(cardDescription(ev));
 }
 
-// ---------------------------------------------------------------------
-//  მეორე ყვითლის ამოცნობა
-//  1) API პირდაპირ წერს "Second Yellow card" / "2nd yellow" / "yellow/red"
-//  2) API ერთსა და იმავე წუთზე იმავე ფეხბურთელს წერს Yellow Card + Red Card
-// ---------------------------------------------------------------------
-
-const yellowMoments = new Set(
+// Only an explicit provider second-yellow label is authoritative. A generic
+// Red Card after a Yellow Card is ambiguous (including close or same-minute
+// sequences), so it stays a normal red rather than relying on timing.
+const explicitSecondYellowMoments = new Set(
     events
-        .filter(ev => isYellowCard(ev) || (isRedCardEvent(ev) && SECOND_YELLOW_RE.test(norm(ev.detail))))
+        .filter(ev => isRedCardEvent(ev) && SECOND_YELLOW_RE.test(cardDescription(ev)))
         .filter(ev => elapsedOf(ev) !== null && playerKey(ev) !== 'name:')
         .map(ev => `${ev.team?.id ?? norm(ev.team?.name)}|${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`)
 );
 
 function isSecondYellow(ev) {
-    if (SECOND_YELLOW_RE.test(norm(ev.detail))) return true;
+    if (SECOND_YELLOW_RE.test(cardDescription(ev))) return true;
     if (elapsedOf(ev) === null) return false;
-    return yellowMoments.has(`${ev.team?.id ?? norm(ev.team?.name)}|${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`);
+    const key = `${ev.team?.id ?? norm(ev.team?.name)}|${playerKey(ev)}|${elapsedOf(ev)}|${extraOf(ev)}`;
+    return explicitSecondYellowMoments.has(key);
 }
 
 // ---------------------------------------------------------------------

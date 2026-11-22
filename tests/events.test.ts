@@ -103,11 +103,84 @@ describe("buildEventsHtml: cards", () => {
   });
 
   it("recognises a second yellow card, written either way", () => {
-    expect(run([card(60, "Beta FC", "Second Yellow card")]).away_events_html).toContain("second-yellow");
-    const yellowThenRed = run([card(60, "Beta FC", "Yellow Card", { id: 9 }), card(60, "Beta FC", "Red Card", { id: 9 })]);
-    expect(yellowThenRed.away_events_html).toContain("second-yellow");
-    expect(yellowThenRed.away_events_html).not.toContain('class="card-icon red"');
-    expect(rows(yellowThenRed.away_events_html)).toBe(1);
+    for (const detail of ["Second Yellow card", "Yellow-Red Card"]) {
+      expect(run([card(60, "Beta FC", detail)]).away_events_html).toContain("second-yellow");
+    }
+    const comment = run([card(60, "Beta FC", "Red Card", { comments: "Second Yellow card" })]);
+    expect(comment.away_events_html).toContain("second-yellow");
+  });
+
+  it("does not guess second yellow from Pedro Neto's ambiguous API event sequence", () => {
+    const pedro = { id: 1864, name: "Pedro Neto" };
+    const portugal = { id: 27, name: "Portugal" };
+    const match = { ...MATCH, home_team: "Wales", away_team: "Portugal", home_score: 2, away_score: 3 };
+    const events = [
+      { type: "Card", detail: "Yellow Card", comments: "Foul", time: { elapsed: 72, extra: null }, player: pedro, team: portugal },
+      { type: "Card", detail: "Red Card", comments: null, time: { elapsed: 74, extra: null }, player: pedro, team: portugal },
+    ];
+    const r = run(events, match);
+    expect(r.away_events_html).toContain('class="card-icon red"');
+    expect(r.away_events_html).not.toContain("second-yellow");
+  });
+
+  it("uses an explicit second-yellow comment when the detail remains generic", () => {
+    const r = run([card(74, "Beta FC", "Red Card", { id: 9, player: "Red Player", comments: "Second Yellow Card" })]);
+    expect(r.away_events_html).toContain("second-yellow");
+    expect(r.away_events_html).not.toContain('class="card-icon red"');
+  });
+
+  it("keeps a genuine direct red shortly after a yellow as a normal red", () => {
+    const r = run([
+      card(72, "Beta FC", "Yellow Card", { id: 9, player: "Red Player" }),
+      card(74, "Beta FC", "Red Card", { id: 9, player: "Red Player", comments: "Violent conduct" }),
+    ]);
+    expect(r.away_events_html).toContain('class="card-icon red"');
+    expect(r.away_events_html).not.toContain("second-yellow");
+  });
+
+  it("keeps a generic red after a caution as red even when only timing is available", () => {
+    const r = run([
+      card(72, "Beta FC", "Yellow Card", { id: 9, player: "Player" }),
+      card(74, "Beta FC", "Red Card", { id: 9, player: "Player" }),
+    ]);
+    expect(r.away_events_html).toContain('class="card-icon red"');
+    expect(r.away_events_html).not.toContain("second-yellow");
+  });
+
+  it("keeps API-Football's VAR card-upgrade red distinct from a second-yellow marker", () => {
+    const match = { ...MATCH, home_team: "Juventus", away_team: "Galatasaray", home_score: 3, away_score: 2 };
+    const player = { id: 19263, name: "Lloyd Kelly" };
+    const team = { id: 496, name: "Juventus" };
+    const events = [
+      { type: "Card", detail: "Yellow Card", comments: "Foul", time: { elapsed: 25, extra: null }, player, team },
+      { type: "Var", detail: "Card upgrade", comments: null, time: { elapsed: 48, extra: null }, player, team },
+      { type: "Card", detail: "Red Card", comments: "Foul", time: { elapsed: 49, extra: null }, player, team },
+    ];
+    const r = run(events, match);
+    expect(r.home_events_html).toContain('class="card-icon red"');
+    expect(r.home_events_html).not.toContain("second-yellow");
+  });
+
+  it("does not infer a second yellow from same-minute yellow/red records", () => {
+    const r = run([
+      card(72, "Beta FC", "Yellow Card", { id: 9, player: "Player" }),
+      card(72, "Beta FC", "Red Card", { id: 9, player: "Player", comments: "VAR review" }),
+    ]);
+    expect(r.away_events_html).toContain('class="card-icon red"');
+    expect(r.away_events_html).not.toContain("second-yellow");
+  });
+
+  it("hides ordinary yellows while retaining distinct direct-red and second-yellow dismissals", () => {
+    const events = [
+      card(18, "Alpha FC", "Yellow Card", { id: 20, player: "Booked Player" }),
+      card(35, "Beta FC", "Yellow-Red Card", { id: 21, player: "Second Yellow Player" }),
+      card(62, "Alpha FC", "Red Card", { id: 22, player: "Direct Red Player" }),
+    ];
+    const r = run(events);
+    expect(r.home_events_html).toContain('class="card-icon red"');
+    expect(r.away_events_html).toContain("second-yellow");
+    expect(r.total_events).toBe(2);
+    expect(r.home_events_html + r.away_events_html).not.toContain("18'");
   });
 
   it("a straight red for a player who had a yellow earlier is still a plain red", () => {
