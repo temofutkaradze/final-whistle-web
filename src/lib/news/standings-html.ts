@@ -3,6 +3,15 @@ import { bundledFonts } from './html.ts';
 import { validateTable, standingsLeagues, type StandingsJob, type StandingsComposition } from './standings.ts';
 import { clubDisplayName } from './club-display-names.ts';
 import { leagueAccents } from '../../../render/league-accents.js';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
+const logoProfiles=require('../../../render/league-logo-profiles.json') as Record<number,{width:number;height:number;alphaArea:number}>;
+const MAX_MARK_WIDTH=72,MAX_MARK_HEIGHT=72,TARGET_MARK_ALPHA_AREA=1600;
+function standingsLeagueLogoSize(id:number){
+  const profile=logoProfiles[id];if(!profile)return {width:MAX_MARK_WIDTH,height:MAX_MARK_HEIGHT};
+  const scale=Math.min(MAX_MARK_WIDTH/profile.width,MAX_MARK_HEIGHT/profile.height,Math.sqrt(TARGET_MARK_ALPHA_AREA/profile.alphaArea));
+  return {width:Number((profile.width*scale).toFixed(3)),height:Number((profile.height*scale).toFixed(3))};
+}
 const esc=(s:unknown)=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const image=(bytes:Buffer)=>`data:image/${bytes[0]===137?'png':bytes[0]===255?'jpeg':'webp'};base64,${bytes.toString('base64')}`;
 // Reuse reviewed Match symbols without altering them; provider artwork is the fallback.
@@ -24,7 +33,7 @@ export function standingsComposition(value:StandingsComposition={}){
   if(![backgroundX,backgroundY,panelOffset].every(n=>typeof n==='number'&&Number.isFinite(n))||backgroundX<0||backgroundX>100||backgroundY<0||backgroundY>100||panelOffset< -20||panelOffset>200)throw Error('Invalid standings composition');
   return {backgroundX,backgroundY,panelOffset};
 }
-export function buildStandingsHtml(job:StandingsJob,background:Buffer,crestBackings:readonly boolean[]=[]):string{
+export function buildStandingsHtml(job:StandingsJob,background:Buffer,crestBackings:readonly boolean[]=[],leagueMarkSize?:{width:number;height:number}):string{
   const t=validateTable(job.standings,job.standings?.leagueId,Date.now(),true);
   const league=standingsLeagues.find(l=>l.id===t.leagueId)!;
   const accent=leagueAccents(t.leagueId);
@@ -34,6 +43,7 @@ export function buildStandingsHtml(job:StandingsJob,background:Buffer,crestBacki
   const shadeHeight=Math.min(1350,Math.max(810,rowHeight*t.rows.length+headerHeight+padding+bottom+panelOffset+240));
   const kicker=t.source.includes('FICTIONAL')?'LEAGUE TABLE / FICTIONAL PREVIEW':'LEAGUE TABLE';
   const logo=symbols.get(t.leagueId)??image(Buffer.from(t.leagueLogo,'base64'));
+  const logoSize=leagueMarkSize??standingsLeagueLogoSize(t.leagueId);
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>
   ${bundledFonts}
   *{box-sizing:border-box}html,body{margin:0;width:2160px;height:2700px;overflow:hidden}
@@ -56,9 +66,9 @@ export function buildStandingsHtml(job:StandingsJob,background:Buffer,crestBacki
   header{height:${headerHeight}px;font-weight:800;position:relative}
   header:after{content:'';position:absolute;bottom:0;left:28px;right:28px;height:1px;background:rgba(255,255,255,.22)}
   .identity{grid-column:1 / 4;display:flex;align-items:center;gap:18px;min-width:0}
-  .league-mark{width:48px;height:48px;object-fit:contain;filter:brightness(0) invert(1);flex:none}
+  .league-mark-frame{width:48px;height:48px;position:relative;flex:none}.league-mark{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:${logoSize.width}px;height:${logoSize.height}px;object-fit:contain;filter:brightness(0) invert(1);max-width:none}
   .kicker{font-size:11px;letter-spacing:2.3px;color:#aebcca;margin-bottom:6px;white-space:nowrap}
   .league-name{font-family:'League Gothic',Arial,sans-serif;font-size:35px;font-weight:400;letter-spacing:.9px;line-height:1;white-space:nowrap}
   header .number{font-size:16px;letter-spacing:1px;color:#b4c2d0}
-  </style></head><body><main class="post"><img class="background" src="${image(background)}"><div class="shade"></div><section class="table"><div class="accent"></div><header><div class="identity"><img class="league-mark" src="${logo}"><div><div class="kicker">${kicker}</div><div class="league-name">${esc(league.name.toUpperCase())}</div></div></div><span class="number">P</span><span class="number">GD</span><span class="number">PTS</span></header>${t.rows.map((r,i)=>{const display=clubDisplayName(r);return `<div class="row"><span class="number rank">${r.position}</span><img class="crest${crestBackings[i]?' light-backing':''}" src="${image(Buffer.from(r.crest,'base64'))}"><span class="name" data-team-id="${esc(r.teamId)}" data-name-review="${display.needsReview}">${esc(display.name)}</span><span class="number stat">${r.played}</span><span class="number stat">${r.goalDifference>0?'+':''}${r.goalDifference}</span><strong class="number points">${r.points}</strong></div>`;}).join('')}</section></main><script>Promise.all([document.fonts.ready,...[...document.images].map(i=>i.decode())]).then(()=>{for(const e of document.querySelectorAll('.name')){let size=parseFloat(getComputedStyle(e).fontSize);while(e.scrollWidth>e.clientWidth&&size>10){e.style.fontSize=(--size)+'px';}if(e.scrollWidth>e.clientWidth||e.scrollHeight>e.parentElement.clientHeight-4)throw Error('Team name cannot fit');}for(const row of document.querySelectorAll('.row')){for(const e of row.querySelectorAll('.number')){let size=parseFloat(getComputedStyle(e).fontSize);while(e.scrollWidth>e.clientWidth&&size>10)e.style.fontSize=(--size)+'px';if(e.scrollWidth>e.clientWidth)throw Error('Statistic cannot fit');}}document.documentElement.setAttribute('data-ready','1');}).catch(()=>{document.documentElement.setAttribute('data-error','Standings layout or image decode failed');document.documentElement.setAttribute('data-ready','1')});</script></body></html>`;
+  </style></head><body><main class="post"><img class="background" src="${image(background)}"><div class="shade"></div><section class="table"><div class="accent"></div><header><div class="identity"><span class="league-mark-frame"><img class="league-mark" src="${logo}"></span><div><div class="kicker">${kicker}</div><div class="league-name">${esc(league.name.toUpperCase())}</div></div></div><span class="number">P</span><span class="number">GD</span><span class="number">PTS</span></header>${t.rows.map((r,i)=>{const display=clubDisplayName(r);return `<div class="row"><span class="number rank">${r.position}</span><img class="crest${crestBackings[i]?' light-backing':''}" src="${image(Buffer.from(r.crest,'base64'))}"><span class="name" data-team-id="${esc(r.teamId)}" data-name-review="${display.needsReview}">${esc(display.name)}</span><span class="number stat">${r.played}</span><span class="number stat">${r.goalDifference>0?'+':''}${r.goalDifference}</span><strong class="number points">${r.points}</strong></div>`;}).join('')}</section></main><script>Promise.all([document.fonts.ready,...[...document.images].map(i=>i.decode())]).then(()=>{for(const e of document.querySelectorAll('.name')){let size=parseFloat(getComputedStyle(e).fontSize);while(e.scrollWidth>e.clientWidth&&size>10){e.style.fontSize=(--size)+'px';}if(e.scrollWidth>e.clientWidth||e.scrollHeight>e.parentElement.clientHeight-4)throw Error('Team name cannot fit');}for(const row of document.querySelectorAll('.row')){for(const e of row.querySelectorAll('.number')){let size=parseFloat(getComputedStyle(e).fontSize);while(e.scrollWidth>e.clientWidth&&size>10)e.style.fontSize=(--size)+'px';if(e.scrollWidth>e.clientWidth)throw Error('Statistic cannot fit');}}document.documentElement.setAttribute('data-ready','1');}).catch(()=>{document.documentElement.setAttribute('data-error','Standings layout or image decode failed');document.documentElement.setAttribute('data-ready','1')});</script></body></html>`;
 }

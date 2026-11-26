@@ -6,6 +6,7 @@ const {createSingleFlight}=require('./operations.js');
 const crests=new Map(),inflight=createSingleFlight();
 let cachedBytes=0;
 const MAX_CACHE_BYTES=4*1024*1024,MAX_CACHE_ENTRIES=32;
+const LEAGUE_MARK_TARGET_ALPHA_AREA=1600,LEAGUE_MARK_MAX_WIDTH=72,LEAGUE_MARK_MAX_HEIGHT=72;
 async function prepareStandingsBackground(bytes,metadata){
   const verified=await validateMatchImage(bytes);
   if(!['jpeg','png','webp'].includes(verified.format)||verified.pages!==1)throw Error('Animated or unsupported standings photograph');
@@ -16,6 +17,16 @@ async function prepareStandingsBackground(bytes,metadata){
   return {primary};
 }
 async function normalizeStandingsCrest(bytes){
+  const result=await loadCrest(bytes);
+  return {png:Buffer.from(result.png),lightBacking:result.lightBacking};
+}
+async function normalizeStandingsLeagueLogo(bytes){
+  const result=await loadCrest(bytes);
+  const scale=Math.min(LEAGUE_MARK_MAX_WIDTH/result.width,LEAGUE_MARK_MAX_HEIGHT/result.height,
+    Math.sqrt(LEAGUE_MARK_TARGET_ALPHA_AREA/result.alphaArea));
+  return {png:Buffer.from(result.png),markSize:{width:Number((result.width*scale).toFixed(3)),height:Number((result.height*scale).toFixed(3))}};
+}
+async function loadCrest(bytes){
   const key=createHash('sha256').update(bytes).digest('hex');
   let result=crests.get(key);
   if(result){crests.delete(key);crests.set(key,result);}
@@ -29,7 +40,7 @@ async function normalizeStandingsCrest(bytes){
     }
     return value;
   });
-  return {png:Buffer.from(result.png),lightBacking:result.lightBacking};
+  return result;
 }
 async function prepareCrest(bytes){
   const {data,info}=await sharp(bytes,{limitInputPixels:1024*1024}).rotate()
@@ -46,6 +57,6 @@ async function prepareCrest(bytes){
   // Remove only fully transparent padding; every painted pixel is retained.
   const png=await sharp(data,{raw:{width:info.width,height:info.height,channels:4}})
     .extract({left,top,width:right-left+1,height:bottom-top+1}).png().toBuffer();
-  return {png,lightBacking:darkNeutral/painted>.85};
+  return {png,lightBacking:darkNeutral/painted>.85,width:right-left+1,height:bottom-top+1,alphaArea:painted};
 }
-module.exports={prepareStandingsBackground,normalizeStandingsCrest};
+module.exports={prepareStandingsBackground,normalizeStandingsCrest,normalizeStandingsLeagueLogo};

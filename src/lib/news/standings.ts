@@ -10,6 +10,8 @@ export const UCL_ROW_HELP='UCL numbers select display rows 1-36, not unique offi
 export const DISABLED_MESSAGE='Current standings generation is not configured. Ask the account owner to set the server-side FOOTBALL_DATA_API_KEY. Existing News posts still work.';
 const aliases: Record<string,number>={'premier league':39,'epl':39,'la liga':140,'laliga':140,'serie a':135,'bundesliga':78,'ligue 1':61,'champions league':2,'uefa champions league':2,'ucl':2,'cl':2};
 export const standingsLeagues=LEAGUES.filter(l=>[39,140,135,78,61,2].includes(l.id));
+const leagueChoices={reply_markup:{keyboard:[...standingsLeagues.map(league=>[{text:league.name}]),[{text:'Back'},{text:'Cancel'}]],resize_keyboard:true,one_time_keyboard:true}};
+const positionChoices={reply_markup:{keyboard:[[{text:'Back'},{text:'Cancel'}]],resize_keyboard:true,one_time_keyboard:true}};
 export function validTeamCount(leagueId:number,count:number):boolean { return Number.isSafeInteger(count)&&(leagueId===2?count===36:count>=2&&count<=24); }
 export function identifyLeague(value:string): number | undefined { return aliases[value.trim().toLowerCase().replace(/\s+/g,' ')]; }
 export function parsePositions(value:string):number[]{
@@ -75,19 +77,29 @@ export function createStandingsService(provider:StandingsProvider|null,now=Date.
   };
 }
 export type StandingsPending={kind:'standings';background?:string;leagueId?:number;positions?:number[];ts:number};
-export function standingsTransition(msg:{text?:string;caption?:string;photo?:{file_id:string}[];document?:{file_id:string;mime_type?:string;file_name?:string}},raw:unknown,now:number):null|{pending:StandingsPending|null;reply:string}|{pending:null;background:string;request:{leagueId:number;positions:number[]};collection:StandingsPending}{
+type NewsCollectionPending={background?:string;circle?:string|null;ts?:number};
+export function standingsTransition(msg:{text?:string;caption?:string;photo?:{file_id:string}[];document?:{file_id:string;mime_type?:string;file_name?:string}},raw:unknown,now:number):null|{pending:StandingsPending|NewsCollectionPending|null;reply:string;replyOptions?:unknown;returnToTemplates?:boolean}|{pending:null;background:string;request:{leagueId:number;positions:number[]};collection:StandingsPending}{
   let p=raw&&typeof raw==='object'&&(raw as StandingsPending).kind==='standings'?raw as StandingsPending:null;
   if(p&&now-p.ts>60*60_000)p=null;
   const file=newsImageFileId(msg);
   let text=(msg.text??msg.caption??'').trim();
   const command=/^\/standings(?:@\w+)?(?:\s|$)/i.test(text);
+  const collected=raw&&typeof raw==='object'&&!Array.isArray(raw)&&!('kind' in raw)&&Number.isFinite((raw as {ts?:number}).ts)&&now-((raw as {ts:number}).ts)<=60*60_000&&(raw as {background?:unknown}).background;
+  if(text==='Tables'&&!p&&typeof collected==='string'){
+    const pending:StandingsPending={kind:'standings',background:collected,ts:now};
+    return {pending,reply:'Choose a league.',replyOptions:leagueChoices};
+  }
   const direct=Object.keys(aliases).sort((a,b)=>b.length-a.length).find(alias=>text.toLowerCase()===alias||text.toLowerCase().startsWith(alias+' ')||text.toLowerCase().startsWith(alias+'\n'));
   if(!p&&!command){
     if(!direct)return null;
     const selection=text.slice(direct.length).trim();
     if(selection){try{parsePositions(selection);}catch{return null;}}
   }
-  if(/^\/cancel(?:@\w+)?$/i.test(text))return {pending:null,reply:'Standings cancelled. Send a new background for a News post.'};
+  if(/^\/cancel(?:@\w+)?$/i.test(text)||text==='Cancel')return {pending:null,reply:'Standings cancelled. Send a new background for a News post.'};
+  if(text==='Back'&&p){
+    if(p.leagueId)return {pending:{kind:'standings',background:p.background,ts:now},reply:'Choose a league.',replyOptions:leagueChoices};
+    return {pending:{background:p.background,circle:null,ts:now},reply:'Choose a template.',returnToTemplates:true};
+  }
   if(/^\/(help|start)(?:@\w+)?$/i.test(text))return {pending:p,reply:'Standings: send a photo, league and selection numbers, or /cancel to return to News.\n'+UCL_ROW_HELP};
   if(/^\//.test(text)&&!command)return {pending:p,reply:'Finish standings or use /cancel before another News command.'};
   if(command)text=text.replace(/^\/standings(?:@\w+)?\s*/i,'');
@@ -97,11 +109,11 @@ export function standingsTransition(msg:{text?:string;caption?:string;photo?:{fi
   if(text){
     const match=Object.keys(aliases).sort((a,b)=>b.length-a.length).find(alias=>text.toLowerCase()===alias||text.toLowerCase().startsWith(alias+' ')||text.toLowerCase().startsWith(alias+'\n'));
     if(match){p.leagueId=aliases[match];text=text.slice(match.length).trim();}
-    else if(!p.leagueId)return {pending:p,reply:'Choose Premier League, La Liga, Serie A, Bundesliga, Ligue 1 or Champions League.'};
-    if(text){try{p.positions=parsePositions(text);}catch(e){delete p.positions;return {pending:p,reply:(e as Error).message};}}
+    else if(!p.leagueId)return {pending:p,reply:'Choose a league.',replyOptions:leagueChoices};
+    if(text){try{p.positions=parsePositions(text);}catch(e){delete p.positions;return {pending:p,reply:(e as Error).message,replyOptions:positionChoices};}}
   }
   if(!p.background)return {pending:p,reply:'Send the background photo or an image file.'+(p.leagueId===2?'\n'+UCL_ROW_HELP:'')};
   if(!p.leagueId)return {pending:p,reply:'Send the league name.'};
-  if(!p.positions)return {pending:p,reply:p.leagueId===2?UCL_ROW_HELP+'\nSend display row numbers, for example: 28 29 30 31.':'Send positions, for example: 1 2 3.'};
+  if(!p.positions)return {pending:p,reply:p.leagueId===2?UCL_ROW_HELP+'\nSend display row numbers, for example: 28 29 30 31.':'Send positions, for example: 1 2 3.',replyOptions:positionChoices};
   return {pending:null,background:p.background,request:{leagueId:p.leagueId,positions:p.positions},collection:p};
 }

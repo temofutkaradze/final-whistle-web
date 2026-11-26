@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const {alignBranding}=require("./branding-position.js");
-const {prepareStandingsBackground,normalizeStandingsCrest}=require('./standings-artwork.js');
+const {prepareStandingsBackground,normalizeStandingsCrest,normalizeStandingsLeagueLogo}=require('./standings-artwork.js');
 const {withPageDeadline}=require("./operations.js");
 const {createNewsAssets}=require('./news-assets.js');
 
@@ -92,7 +92,19 @@ module.exports = function createNewsRenderer({
       const {validateTable}=await import('../src/lib/news/standings.ts');
       validateTable(job.standings,job.standings?.leagueId,Date.now(),true);
       const normalized=[],backings=[];
-      for(const value of [job.standings.leagueLogo,...job.standings.rows.map(r=>r.crest)]){
+      // News-only local copy of the exact lion-only Premier League asset used by Match.
+      // Keep it outside Match's watched league-symbol directory so Match output stays untouched.
+      const leagueLogoBytes=job.standings.leagueId===39
+        ?fs.readFileSync(path.join(__dirname,'assets','news','league-symbols','39.png'))
+        :Buffer.from(job.standings.leagueLogo,'base64');
+      await validateImage(leagueLogoBytes,'standings crest');
+      const leagueLogoMeta=await sharp(leagueLogoBytes,{limitInputPixels:25_000_000}).metadata();
+      if((leagueLogoMeta.pages??1)>1||leagueLogoMeta.width>1024||leagueLogoMeta.height>1024)throw new Error('Invalid standings crest dimensions or animation');
+      const leagueLogo=job.standings.leagueId===39
+        ?await normalizeStandingsLeagueLogo(leagueLogoBytes)
+        :await normalizeStandingsCrest(leagueLogoBytes);
+      normalized.push(leagueLogo.png.toString('base64'));
+      for(const value of job.standings.rows.map(r=>r.crest)){
         const bytes=Buffer.from(value,'base64');
         await validateImage(bytes,'standings crest');
         const meta=await sharp(bytes,{limitInputPixels:25_000_000}).metadata();
@@ -106,7 +118,7 @@ module.exports = function createNewsRenderer({
       const reviewCount=job.standings.rows.filter(r=>clubDisplayName(r).needsReview).length;
       if(reviewCount)console.warn('Standings artwork: '+reviewCount+' unmapped club name(s) need review; original names retained.');
       // One deterministic cover crop; no backdrop copy or subject detection.
-      html=buildStandingsHtml(job,bg,backings.slice(1));
+      html=buildStandingsHtml(job,bg,backings,leagueLogo.markSize);
     }else html=buildHtml(job, bg, secondary,assets.add);
 
     // Separate browser context: Match rendering remains isolated.
@@ -147,21 +159,21 @@ module.exports = function createNewsRenderer({
         throw new Error("Unexpected News image dimensions");
       }
 
-      // Quotes/editorial posts retain the native lossless capture: no resize,
-      // JPEG encoder, sharpening or grain. Preserve the existing standings export.
+      // Existing News layouts retain their prior export choice. Standings now
+      // bypasses the JPEG branch and writes this verified capture unchanged.
       const lossless = job.layout !== 'standings';
-      const bytes = lossless ? png : await makeJpeg(png, { grain: false });
+      const bytes = job.layout === 'standings' ? png : lossless ? png : await makeJpeg(png, { grain: false });
 
       fs.mkdirSync(outputDir, { recursive: true });
 
       const imagePath = path.join(
         outputDir,
-        `news_${crypto.randomUUID()}.${lossless ? 'png' : 'jpg'}`
+        `news_${crypto.randomUUID()}.${job.layout === 'standings' || lossless ? 'png' : 'jpg'}`
       );
 
       signal?.throwIfAborted();fs.writeFileSync(imagePath, bytes);
 
-      return lossless ? { png_path: imagePath } : { jpg_path: imagePath };
+      return job.layout === 'standings' || lossless ? { png_path: imagePath } : { jpg_path: imagePath };
     } finally {
       await context.close().catch(() => {});
     }

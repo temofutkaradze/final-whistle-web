@@ -1,5 +1,6 @@
 import {describe,it,expect,vi} from 'vitest';
 import sharp from 'sharp';
+import {readFile} from 'node:fs/promises';
 import {tinyApng} from './helpers/image-fixtures';
 import {newsImageFileId,originalNewsTransition} from '../src/lib/news/conversation';
 import {standingsTransition,createStandingsService} from '../src/lib/news/standings';
@@ -7,7 +8,7 @@ import {buildStandingsHtml,standingsGeometry,standingsComposition} from '../src/
 import {CLUB_DISPLAY_NAMES,clubDisplayName,displayNameCollisions} from '../src/lib/news/club-display-names';
 import {fictionalTable} from './standings-fixture';
 // @ts-expect-error Existing CommonJS renderer helper has no declaration file.
-import {prepareStandingsBackground,normalizeStandingsCrest} from '../render/standings-artwork.js';
+import {prepareStandingsBackground,normalizeStandingsCrest,normalizeStandingsLeagueLogo} from '../render/standings-artwork.js';
 
 describe('shared News and standings image-input hints',()=>{
   for(const mime of ['image/jpeg','image/jpg','image/pjpeg','application/octet-stream',undefined])it('accepts IMG_8334.JPG with '+String(mime)+' without trusting its bytes',()=>{
@@ -49,6 +50,20 @@ describe('standings-only photo and crest preparation',()=>{
     const result=await normalizeStandingsCrest(padded);const clean=result.png;expect(result.lightBacking).toBe(false);expect(await sharp(clean).metadata()).toMatchObject({width:16,height:24});
     expect(await sharp(clean).raw().toBuffer()).toEqual(await sharp(core).raw().toBuffer());
   });
+  it('sizes actual league-mark alpha coverage consistently while retaining source aspect ratio',async()=>{
+    const square=await sharp({create:{width:32,height:32,channels:4,background:'#ffffff'}}).png().toBuffer();
+    const portrait=await sharp({create:{width:24,height:48,channels:4,background:'#ffffff'}}).png().toBuffer();
+    const padded=await sharp({create:{width:100,height:100,channels:4,background:'#00000000'}}).composite([{input:square,left:34,top:34}]).png().toBuffer();
+    const a=await normalizeStandingsLeagueLogo(padded),b=await normalizeStandingsLeagueLogo(portrait);
+    const ma=await sharp(a.png).metadata(),mb=await sharp(b.png).metadata();
+    expect(ma).toMatchObject({width:32,height:32,format:'png'});expect(mb).toMatchObject({width:24,height:48,format:'png'});
+    expect(a.markSize.width).toBeCloseTo(a.markSize.height,3);
+    expect(b.markSize.width/b.markSize.height).toBeCloseTo(.5,2);
+    expect(a.markSize.width*a.markSize.height).toBeCloseTo(1600,0);
+    expect(b.markSize.width*b.markSize.height).toBeGreaterThan(1500);
+    expect(b.markSize.width*b.markSize.height).toBeLessThanOrEqual(1600);
+    expect(await sharp(a.png).raw().toBuffer()).toEqual(await sharp(square).raw().toBuffer());
+  });
   it('adds a neutral backing only for dark monochrome marks without recoloring them',async()=>{
     const dark=await sharp({create:{width:8,height:12,channels:4,background:'#111111'}}).png().toBuffer();
     const result=await normalizeStandingsCrest(dark);expect(result.lightBacking).toBe(true);expect(await sharp(result.png).raw().toBuffer()).toEqual(await sharp(dark).raw().toBuffer());
@@ -60,6 +75,24 @@ describe('standings-only photo and crest preparation',()=>{
   });
 });
 describe('editorial standings layout contract',()=>{
+  it('sizes each reviewed static league logo from its measured artwork profile',async()=>{
+    for(const leagueId of [2,61,78,135,140]){
+      const bytes=await readFile(new URL(`../render/assets/leagues/symbols/${leagueId}.png`,import.meta.url));
+      const measured=await normalizeStandingsLeagueLogo(bytes);
+      const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable(leagueId)})(leagueId,[1,2,3]);
+      const html=buildStandingsHtml(job,Buffer.from('photo'));
+      expect(html).toContain(`width:${measured.markSize.width}px;height:${measured.markSize.height}px;object-fit:contain`);
+      expect(html).toContain('.league-mark-frame{width:48px;height:48px;position:relative;flex:none}');
+    }
+  });
+  it('enlarges the actual league-mark artwork without moving the fixed header slot or title',async()=>{
+    const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable(39)})(39,[1,2,3]);
+    const html=buildStandingsHtml(job,Buffer.from('photo'),[],{width:70,height:50});
+    expect(html).toContain('.league-mark-frame{width:48px;height:48px;position:relative;flex:none}');
+    expect(html).toContain('width:70px;height:50px;object-fit:contain');
+    expect(html).toContain('grid-column:1 / 4;display:flex;align-items:center;gap:18px');
+    expect(html).toContain('.table{position:absolute;bottom:46px;left:54px;width:972px;');
+  });
   it('uses a Match-style bottom shade while preserving the clear upper photo and compact panel geometry',async()=>{
     for(const count of [3,4]){
       const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable()})(39,Array.from({length:count},(_,i)=>i+1));

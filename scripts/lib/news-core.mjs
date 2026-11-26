@@ -87,6 +87,7 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
           transition={pending:null,background:raw.background,circle:raw.circle??null,job:{...raw.job,branding:msg.text.trim()==='Yes'}};
         }
       }else transition=editorialTransition(msg,raw,now())??standingsTransition(msg,raw,now())??originalNewsTransition(msg,pending,now(),config);
+      if(transition?.returnToTemplates){transition={...transition,replyOptions:EDITORIAL_KEYBOARD};delete transition.returnToTemplates;}
       if('request' in transition){
         // Resolve before downloading; disabled sources never process the user's photo.
         try{transition={pending:null,background:transition.background,circle:null,job:await standings(transition.request.leagueId,transition.request.positions)};}

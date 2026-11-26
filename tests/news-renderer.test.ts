@@ -63,16 +63,16 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
   for(const count of [1,2,3,4,20,36])it('renders fictional standings with '+count+' rows using the actual News pipeline',async()=>{
     const job=await createStandingsService({id:'test-only',getCurrentTable:()=>fictionalTable(count===36?2:39)})(count===36?2:39,Array.from({length:count},(_,i)=>i+1));
     const response=await post({job,background:background.toString('base64'),circle:null});
-    expect(response.status).toBe(200);const result=await response.json();outputs.add(result.jpg_path);
-    const bytes=await readFile(result.jpg_path);const meta=await sharp(bytes).metadata();
-    expect(meta).toMatchObject({width:1080,height:1350,format:'jpeg',chromaSubsampling:'4:4:4'});expect(meta.icc?.length).toBeGreaterThan(0);
+    expect(response.status).toBe(200);const result=await response.json();outputs.add(result.png_path);
+    const bytes=await readFile(result.png_path);const meta=await sharp(bytes).metadata();
+    expect(result.jpg_path).toBeUndefined();expect(meta).toMatchObject({width:2160,height:2700,format:'png'});
   },90_000);
   it('renders UCL display rows 28-31 with official ranks 28,29,29,31',async()=>{
     const table=await fictionalTable(2);table.rows[28].teamId='1899';table.rows[29].teamId='721';table.rows[29].position=29;
     const job=await createStandingsService({id:'fictional-only',getCurrentTable:async()=>table})(2,[28,29,30,31]);
     expect(job.standings.rows.map(r=>r.position)).toEqual([28,29,29,31]);
     const response=await post({job,background:background.toString('base64'),circle:null});expect(response.status).toBe(200);
-    const result=await response.json();outputs.add(result.jpg_path);expect(await sharp(await readFile(result.jpg_path)).metadata()).toMatchObject({width:1080,height:1350,format:'jpeg'});
+    const result=await response.json();outputs.add(result.png_path);expect(result.jpg_path).toBeUndefined();expect(await sharp(await readFile(result.png_path)).metadata()).toMatchObject({width:2160,height:2700,format:'png'});
   },90_000);
   it('rejects unsafe/non-raster standings crests before Chromium',async()=>{
     const job=await createStandingsService({id:'test',getCurrentTable:()=>fictionalTable()})(39,[1,2]);
@@ -82,12 +82,12 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
   for(const [width,height] of [[600,900],[800,800],[1200,675]])it('fills the canvas without bars for '+width+'x'+height,async()=>{
     const photo=await sharp({create:{width,height,channels:3,background:'#4e92ac'}}).jpeg().toBuffer();
     const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable()})(39,[1,2,3]);
-    const r=await post({job,background:photo.toString('base64'),circle:null});expect(r.status).toBe(200);const out=await r.json();outputs.add(out.jpg_path);
-    const {data,info}=await sharp(await readFile(out.jpg_path)).raw().toBuffer({resolveWithObject:true});expect(info).toMatchObject({width:1080,height:1350});
+    const r=await post({job,background:photo.toString('base64'),circle:null});expect(r.status).toBe(200);const out=await r.json();outputs.add(out.png_path);expect(out.jpg_path).toBeUndefined();
+    const {data,info}=await sharp(await readFile(out.png_path)).raw().toBuffer({resolveWithObject:true});expect(info).toMatchObject({width:2160,height:2700});
     // The single cover-fitted source reaches all edges, including former margins.
-    for(const [x,y] of [[5,5],[1074,5],[5,600],[1074,600]]){const i=(y*info.width+x)*info.channels;expect(data[i+1]).toBeGreaterThan(50);expect(data[i+2]).toBeGreaterThan(70);}
+    for(const [x,y] of [[5,5],[2154,5],[5,600],[2154,600]]){const i=(y*info.width+x)*info.channels;expect(data[i+1]).toBeGreaterThan(50);expect(data[i+2]).toBeGreaterThan(70);}
   },90_000);
-  it('applies explicit horizontal and vertical cover positions to actual JPEG pixels',async()=>{
+  it('applies explicit horizontal and vertical cover positions to actual PNG pixels',async()=>{
     const job=await createStandingsService({id:'fixture',getCurrentTable:()=>fictionalTable()})(39,[1,2,3]);
     const horizontal=await sharp({create:{width:1200,height:600,channels:3,background:'#00aa00'}}).composite([
       {input:await sharp({create:{width:600,height:600,channels:3,background:'#ee2020'}}).png().toBuffer(),left:0,top:0},
@@ -102,8 +102,8 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
       [vertical,{backgroundY:0},0],[vertical,{backgroundY:100},2],
     ] as const){
       const response=await post({job:{...job,composition},background:photo.toString('base64'),circle:null});expect(response.status).toBe(200);
-      const result=await response.json();outputs.add(result.jpg_path);
-      const {data}=await sharp(await readFile(result.jpg_path)).extract({left:10,top:10,width:1,height:1}).removeAlpha().raw().toBuffer({resolveWithObject:true});
+      const result=await response.json();outputs.add(result.png_path);expect(result.jpg_path).toBeUndefined();
+      const {data}=await sharp(await readFile(result.png_path)).extract({left:10,top:10,width:1,height:1}).removeAlpha().raw().toBuffer({resolveWithObject:true});
       expect(data[channel]).toBeGreaterThan(200);expect(data[channel===0?2:0]).toBeLessThan(70);
     }
     expect((await post({job:{...job,composition:{backgroundX:'0%;transform:scale(10)'}},background:horizontal.toString('base64'),circle:null})).status).toBe(500);
@@ -115,7 +115,7 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     const settings={findUnique:async()=>structuredClone(state),updateMany:async({where,data}:any)=>{if(where.OR&&state.lastUpdateId!==null&&state.lastUpdateId>=where.OR[1].lastUpdateId.lt)return {count:0};Object.assign(state,data);return {count:1};}};
     const sendDocument=vi.fn(async()=>{});
     const handle=createNewsHandler({prisma:{newsSettings:settings},tg:{sendMessage:async()=>({ok:true}),sendDocument},ownerId:'test',connectionToken:'fictional',download:async()=>photo,cleanup:async()=>{},standings:createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}),render:async(job:unknown,bytes:Buffer)=>{
-      expect(bytes).toEqual(photo);const r=await post({job,background:bytes.toString('base64'),circle:null});expect(r.status).toBe(200);const out=await r.json();outputs.add(out.jpg_path);expect(await sharp(await readFile(out.jpg_path)).metadata()).toMatchObject({width:1080,height:1350,format:'jpeg'});return out.jpg_path;
+      expect(bytes).toEqual(photo);const r=await post({job,background:bytes.toString('base64'),circle:null});expect(r.status).toBe(200);const out=await r.json();outputs.add(out.png_path);expect(out.jpg_path).toBeUndefined();expect(await sharp(await readFile(out.png_path)).metadata()).toMatchObject({width:2160,height:2700,format:'png'});return out.png_path;
     }});
     const message={document:{file_id:'original-jpg',file_name:'IMG_8334.JPG',mime_type:'application/octet-stream'},caption:'Premier League 1 2 3',chat:{id:42,type:'private'},from:{id:42}};
     expect(standingsTransition(message,null,Date.now())).toMatchObject({background:'original-jpg'});

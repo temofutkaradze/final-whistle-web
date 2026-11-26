@@ -59,7 +59,7 @@ html,body{width:2160px;height:2700px;overflow:hidden;background:#080a10}
 .rule i{flex:1;height:2px;background:rgba(255,255,255,.55)}
 .rule .quote-mark{display:block;margin:0 12px;height:65px;line-height:88px;font-family:Arial,sans-serif;font-size:112px;font-weight:900;color:${style.accent};letter-spacing:-14px;padding-right:14px}
 .quote-mark>span{display:block;position:relative;transform:scale(.74);transform-origin:center top}
-#q{position:relative;top:${style.textTop}px;font-family:'${font}',Anton,Impact,'Arial Narrow',sans-serif;font-size:${style.textSize}px;line-height:${style.lineHeight};${style.letterSpacing?`letter-spacing:${style.letterSpacing}px;`:''}-webkit-text-stroke:1.5px;text-align:${style.align};color:${style.textColor};text-transform:uppercase;text-wrap:balance;width:100%}
+#q{position:relative;top:${style.textTop}px;font-family:'${font}',Anton,Impact,'Arial Narrow',sans-serif;font-size:${style.textSize}px;line-height:${style.lineHeight};${style.letterSpacing?`letter-spacing:${style.letterSpacing}px;`:''}-webkit-text-stroke:1.5px;text-align:${style.align};color:${style.textColor};text-transform:uppercase;text-wrap:balance;overflow-wrap:anywhere;width:100%}
 .y{color:${style.accent}}
 .breaking-bottom{position:absolute;left:${Math.max(20,style.textInset-6)}px;right:${Math.max(20,style.textInset-6)}px;bottom:${style.textBottom+26}px;display:flex;flex-direction:column;align-items:center;${style.textTop!==-35?`transform:translateY(${style.textTop+35}px)`:''}}
 .breaking-frame{width:100%;border:2px solid #e52d32;padding:10px 12px 8px;text-align:center;background:rgba(5,7,12,.42)}
@@ -90,10 +90,14 @@ function place(img,box,p){
 }
 function ready(i){return i?i.decode():Promise.resolve();}
 function fit(){
-  var q=document.getElementById('q'),a=document.getElementById('a'),fs=${style.textSize};
+  var q=document.getElementById('q'),a=document.getElementById('a'),bottom=document.querySelector('.bottom'),post=document.querySelector('.post'),fs=${style.textSize};
   q.style.fontSize=fs+'px';
-  function lines(){return Math.round(q.offsetHeight/(fs*${style.lineHeight}));}
-  while(fs>40&&(lines()>3||(lines()===3&&fs>84)||q.scrollWidth>q.clientWidth)){fs-=2;q.style.fontSize=fs+'px';}
+  q.style.overflowWrap='anywhere';
+  var postRect=post.getBoundingClientRect(),scale=postRect.width/post.clientWidth,safeTop=postRect.top+580*scale;
+  function quoteFits(){return q.scrollWidth<=q.clientWidth+1&&bottom.getBoundingClientRect().top>=safeTop;}
+  // Keep the configured type size unless the complete quote/attribution block
+  // would enter the upper photo area. Long copy wraps to more lines first.
+  while(fs>40&&!quoteFits()){fs-=1;q.style.fontSize=fs+'px';}
   var br=document.querySelector('.breaking-frame span'),bs=document.querySelector('.breaking-summary');
   if(br){var bf=${builtInBreaking ? 230 : 118};while(bf>64&&br.scrollWidth>br.clientWidth){bf-=2;br.style.fontSize=bf+'px';}}
   if(bs){var sf=${style.breakingSize};while(sf>22&&bs.offsetHeight>240){sf-=1;bs.style.fontSize=sf+'px';}}

@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { originalNewsTransition, BACKGROUND_SAVED, CIRCLE_SAVED } from '@/lib/news/conversation';
 import { buildOriginalJob, DEFAULT_NEWS_STYLE } from '@/lib/news/parse';
+import { buildHtml } from '@/lib/news/html';
 // @ts-expect-error Runtime JavaScript module has no declaration file.
 import { createNewsHandler } from '../scripts/lib/news-core.mjs';
 // @ts-expect-error Runtime JavaScript module has no declaration file.
@@ -50,6 +51,20 @@ describe('News original conversation',()=>{
   });
   it('keeps original BREAKING layout and caption-parsing limitation',()=>{
     expect(buildOriginalJob('BREAKING | Headline || literal',true)).toMatchObject({layout:'breaking',quote:'Headline || literal',caption:''});
+  });
+});
+
+describe('News quote typography fitting',()=>{
+  it('keeps the configured quote size until the vertical safe area requires shrinking',()=>{
+    const html=buildHtml(buildOriginalJob('AUTHOR | A *SHORT QUOTE*',false),Buffer.from('background'),null,()=> 'data:image/png;base64,AA==');
+    expect(html).toContain('font-size:96px');
+    expect(html).toContain('overflow-wrap:anywhere');
+    expect(html).toContain('safeTop=postRect.top+580*scale');
+    expect(html).toContain('function quoteFits(){return q.scrollWidth<=q.clientWidth+1&&bottom.getBoundingClientRect().top>=safeTop;}');
+    expect(html).toContain('while(fs>40&&!quoteFits()){fs-=1;q.style.fontSize=fs+\'px\';}');
+    expect(html).not.toContain('lines()>3');
+    expect(html).not.toContain('fs>84');
+    expect(html).toContain('<span class="y">SHORT QUOTE</span>');
   });
 });
 

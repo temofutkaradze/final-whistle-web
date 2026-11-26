@@ -10,7 +10,7 @@ export const EDITORIAL_TEMPLATES={
 export type EditorialTemplate=keyof typeof EDITORIAL_TEMPLATES;
 type EditorialPending={stage:'editorial';background:string;template:EditorialTemplate;step:'version'|'headline'|'subtitle';version?:1|2;headline?:string;ts:number};
 type Collection={background?:string;circle?:string|null;ts?:number;stage?:string};
-export const EDITORIAL_KEYBOARD={reply_markup:{keyboard:[...Object.values(EDITORIAL_TEMPLATES),'Quotes','Breaking','Branding'].map(text=>[{text}]),resize_keyboard:true,one_time_keyboard:true}};
+export const EDITORIAL_KEYBOARD={reply_markup:{keyboard:[...Object.values(EDITORIAL_TEMPLATES),'Quotes','Breaking','Tables','Branding'].map(text=>[{text}]),resize_keyboard:true,one_time_keyboard:true}};
 
 /** Opt-in templates coexist with the original text/circle and standings conversations. */
 export function editorialTransition(message:NewsMessage,raw:unknown,now:number){
