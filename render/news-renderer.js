@@ -148,6 +148,7 @@ module.exports = function createNewsRenderer({
           { timeout: 30000 }
         );
         const error = await page.evaluate(() => document.documentElement.getAttribute('data-error'));
+        if (error === 'NEWS_MANUAL_LAYOUT_UNSAFE') throw Object.assign(new Error('Manual Large Headline does not fit safely.'),{code:error});
         if (error) throw new Error(error);
 
         if(job.branding===true)await alignBranding(page);

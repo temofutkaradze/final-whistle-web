@@ -108,13 +108,42 @@ describe('News bot integration with mocked Telegram and persistence',()=>{
     const f=fixture();await f.handle(f.update(1,{document:{file_id:'full-quality-background',file_name:'photo.webp',mime_type:'application/octet-stream'}}));
     expect(f.tg.sendMessage.mock.calls[0]).toMatchObject(['42',expect.any(String),{reply_markup:{keyboard:expect.arrayContaining([[{text:label}]]),resize_keyboard:true,one_time_keyboard:true}}]);
     await f.handle(f.update(2,{text:label}));
+    if(label==='Large Headline'){expect(f.settings.pending.step).toBe('layout');await f.handle(f.update(3,{text:'Automatic'}));}
     if(label==='NEWS (Red)'||label==='DID YOU KNOW (Yellow)'){expect(f.settings.pending.step).toBe('version');await f.handle(f.update(3,{text:'Version 1'}));}
     expect(f.settings.pending.step).toBe('headline');
-    await f.handle(f.update(4,{text:'THE *NEXT\nCHAPTER*'}));
+    const headlineUpdate=4;
+    await f.handle(f.update(headlineUpdate,{text:'THE *NEXT\nCHAPTER*'}));
     if(label==='Headline + Subtitle'){expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(5,{text:'An editable *subtitle*'}));}
-    expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(6,{text:'No'}));
+    expect(f.render).not.toHaveBeenCalled();await f.handle(f.update(headlineUpdate+(label==='Headline + Subtitle'?2:1),{text:'No'}));
     expect(f.render).toHaveBeenCalledTimes(1);expect(f.render.mock.calls[0][0]).toMatchObject({branding:false,layout:'single',quote:'THE *NEXT\nCHAPTER*',editorial:{headline:'THE *NEXT\nCHAPTER*',subtitle:label==='Headline + Subtitle'?'An editable *subtitle*':''}});
     expect(f.tg.sendDocument).toHaveBeenCalledOnce();expect(f.settings.pending.stage).toBe('delivered');
+  });
+  it('offers Automatic and Manual for Large Headline and carries exact manual lines and offset into the job',async()=>{
+    const f=fixture();await f.handle(f.update(1,photo));await f.handle(f.update(2,{text:'Large Headline'}));
+    expect((f.tg.sendMessage.mock.calls.at(-1)?.[2] as any).reply_markup.keyboard[0]).toEqual([{text:'Automatic'},{text:'Manual'}]);
+    await f.handle(f.update(3,{text:'Manual'}));
+    expect(f.tg.sendMessage.mock.calls.at(-1)?.[0]).toBe('42');
+    expect(f.tg.sendMessage.mock.calls.at(-1)?.[1]).toBe('Enter the bottom offset in pixels. Default: 128 px. Higher values move the headline upward.');
+    expect((f.tg.sendMessage.mock.calls.at(-1)?.[2] as any).reply_markup.keyboard[0]).toEqual([{text:'Default (128 px)'}]);
+    await f.handle(f.update(4,{text:'Default (128 px)'}));
+    expect(f.tg.sendMessage.mock.calls.at(-1)?.[1]).toBe('Send your headline in one message. Use a new line wherever you want a new line in the image. On desktop, use Shift+Enter to insert a line break without sending the message.');
+    const headline='CHELSEA REPORTEDLY TARGET\nALEX SCOTT FOR JANUARY';
+    await f.handle(f.update(5,{text:headline}));expect(f.render).not.toHaveBeenCalled();
+    await f.handle(f.update(6,{text:'No'}));
+    expect(f.render).toHaveBeenCalledOnce();expect((f.render.mock.calls[0][0] as any).editorial).toMatchObject({template:'large-headline',layoutMode:'manual',bottomOffset:128,headline});
+    expect(f.tg.sendDocument).toHaveBeenCalledOnce();expect(f.settings.pending.stage).toBe('delivered');
+  });
+  it('restores Manual headline entry and allows an offset correction after an unsafe fit',async()=>{
+    const f=fixture();f.render.mockRejectedValueOnce(Object.assign(new Error('unsafe manual fit'),{code:'NEWS_MANUAL_LAYOUT_UNSAFE'}));
+    await f.handle(f.update(1,photo));await f.handle(f.update(2,{text:'Large Headline'}));await f.handle(f.update(3,{text:'Manual'}));
+    await f.handle(f.update(4,{text:'128px'}));await f.handle(f.update(5,{text:'FIRST LINE\nSECOND LINE'}));await f.handle(f.update(6,{text:'No'}));
+    expect(f.settings.pending).toMatchObject({stage:'editorial',template:'large-headline',layoutMode:'manual',step:'fit',bottomOffset:128,headline:'FIRST LINE\nSECOND LINE'});
+    expect(String(f.tg.sendMessage.mock.calls.at(-1)?.[1])).toContain('Change the headline or offset');
+    expect((f.tg.sendMessage.mock.calls.at(-1)?.[2] as any).reply_markup.keyboard[0]).toEqual([{text:'Change headline'},{text:'Change offset'}]);
+    await f.handle(f.update(7,{text:'Change offset'}));await f.handle(f.update(8,{text:'160 px'}));
+    expect(f.settings.pending).toMatchObject({stage:'branding',job:{editorial:{template:'large-headline',layoutMode:'manual',bottomOffset:160,headline:'FIRST LINE\nSECOND LINE'}}});
+    await f.handle(f.update(9,{text:'No'}));
+    expect(f.render).toHaveBeenCalledTimes(2);expect((f.render.mock.calls[1][0] as any).editorial.bottomOffset).toBe(160);expect(f.tg.sendDocument).toHaveBeenCalledOnce();
   });
   it('renders once, applies saved styling, sends a JPG document, and needs no /start per post',async()=>{
     const f=fixture();await f.handle(f.update(1,photo));

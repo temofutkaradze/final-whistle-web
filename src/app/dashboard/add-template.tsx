@@ -5,141 +5,22 @@
 // (the built-in one never changes); editing the customer's own template can overwrite it or be saved as a new one.
 // The preview is a sandboxed iframe: no script runs in it.
 
-import { useActionState, useId, useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { checkTemplateHtml } from "../../../render/template-check.js";
 import { previewDocument } from "../../../render/final-document.js";
 import { fillPlaceholders } from "@/lib/sample-match";
 import {
-  BRAND_SPOTS,
   DEFAULT_CONFIG,
-  FONTS,
-  FRAMES,
-  LAYOUTS,
-  LEAGUE_SPOTS,
-  POSITIONS,
   PRESETS,
-  SEPARATORS,
-  SHADES,
-  SIZES,
   buildTemplateHtml,
   type BuilderConfig,
 } from "@/lib/template-builder";
 
-export type Editing = { key: string; name: string; html: string; config: BuilderConfig | null; ownId: string | null };
-export type SaveState = { error: string } | null;
-type SaveAction = (prev: SaveState, formData: FormData) => Promise<SaveState>;
-type Opt = [string, string];
+export type { Editing, SaveState } from "@/features/match/template-editor/types";
+import type { Editing, SaveAction } from "@/features/match/template-editor/types";
+import { type Opt, PLACEHOLDERS, EXAMPLE, SIZE, LAYOUT, POSITION, SHADE, FRAME, SEPARATOR, LEAGUE_SPOT, BRAND_SPOT, FONT } from "@/features/match/template-editor/definitions";
 
-const PLACEHOLDERS: [string, string][] = [
-  ["{{BACKGROUND}}", "the photo behind the post"],
-  ["{{PAGE_NAME}}", "your page name, or your logo if you chose it"],
-  ["{{LEAGUE_LOGO}}", "the league logo (give its <img> class=\"league-logo\" to get the white version)"],
-  ["{{HOME_NAME}} {{AWAY_NAME}}", "team names"],
-  ["{{HOME_LOGO}} {{AWAY_LOGO}}", "team logos"],
-  ["{{HOME_SCORE}} {{AWAY_SCORE}}", "the goals of each team"],
-  ["{{HOME_EVENTS}} {{AWAY_EVENTS}}", "scorers and cards of each team"],
-];
-
-const EXAMPLE = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 1080px; height: 1350px; overflow: hidden; background: #000; font-family: Arial, sans-serif; }
-  .bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .shade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,.9), rgba(0,0,0,0) 70%); }
-  .brand { position: absolute; top: 30px; left: 36px; color: #fff; font-size: 34px; font-weight: 800; text-transform: uppercase; white-space: pre-line; }
-  .board { position: absolute; left: 90px; right: 90px; bottom: 80px; color: #fff; text-align: center; }
-  .row { display: flex; align-items: center; justify-content: space-between; }
-  .row img { width: 170px; height: 170px; object-fit: contain; }
-  .score { font-size: 200px; font-weight: 900; }
-  .names { display: flex; justify-content: space-between; font-size: 32px; font-weight: 800; text-transform: uppercase; margin-top: 10px; }
-  .events { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; margin-top: 30px; font-size: 24px; }
-  .left { text-align: right; } .right { text-align: left; }
-</style>
-</head>
-<body>
-  <img class="bg" src="{{BACKGROUND}}" alt="">
-  <div class="shade"></div>
-  <div class="brand">{{PAGE_NAME}}</div>
-  <div class="board">
-    <div class="row">
-      <img src="{{HOME_LOGO}}" alt="">
-      <div class="score">{{HOME_SCORE}}-{{AWAY_SCORE}}</div>
-      <img src="{{AWAY_LOGO}}" alt="">
-    </div>
-    <div class="names"><span>{{HOME_NAME}}</span><span>{{AWAY_NAME}}</span></div>
-    <div class="events"><div class="left">{{HOME_EVENTS}}</div><div class="right">{{AWAY_EVENTS}}</div></div>
-  </div>
-</body>
-</html>
-`;
-
-const SIZE: Opt[] = SIZES.map((v) => [v, v[0].toUpperCase() + v.slice(1)]);
-const LAYOUT: Opt[] = LAYOUTS.map((v) => [v, v === "side" ? "Logos beside the score" : "Score on top, teams below"]);
-const POSITION: Opt[] = POSITIONS.map((v) => [v, { upper: "Top", middle: "Middle", lower: "Bottom" }[v]]);
-const SHADE: Opt[] = SHADES.map((v) => [v, { none: "None", gradient: "Fade", panel: "Panel", band: "Band behind the score", card: "Rounded card" }[v]]);
-const FRAME: Opt[] = FRAMES.map((v) => [v, { none: "None", thin: "Thin", thick: "Thick" }[v]]);
-const SEPARATOR: Opt[] = SEPARATORS.map((v) => [v, `2 ${v} 1`]);
-const LEAGUE_SPOT: Opt[] = LEAGUE_SPOTS.map((v) => [v, { above: "Above the score", "top-left": "Top left", "top-center": "Top centre", "top-right": "Top right" }[v]]);
-const BRAND_SPOT: Opt[] = BRAND_SPOTS.map((v) => [
-  v,
-  { "top-left": "Top left", "top-center": "Top centre", "top-right": "Top right", "bottom-left": "Bottom left", "bottom-center": "Bottom centre", "bottom-right": "Bottom right" }[v],
-]);
-const FONT: Opt[] = Object.keys(FONTS).map((f) => [f, f]);
-
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: Opt[]; onChange: (v: string) => void }) {
-  const id = useId();
-  return (
-    <label htmlFor={id}>
-      {label}
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map(([v, l]) => (
-          <option key={v} value={v}>
-            {l}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-function ColorField({ label, value, onChange, disabled }: { label: string; value: string; onChange: (v: string) => void; disabled?: boolean }) {
-  const id = useId();
-  return (
-    <label htmlFor={id}>
-      {label}
-      <input id={id} type="color" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} />
-    </label>
-  );
-}
-function RangeField({ label, value, min, max, step = 1, unit = "", onChange, disabled }: { label: string; value: number; min: number; max: number; step?: number; unit?: string; onChange: (v: number) => void; disabled?: boolean }) {
-  const id = useId();
-  return (
-    <label htmlFor={id}>
-      {label} ({value}
-      {unit})
-      <input id={id} type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled} />
-    </label>
-  );
-}
-function CheckField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  const id = useId();
-  return (
-    <label className="check" htmlFor={id}>
-      <input id={id} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      {label}
-    </label>
-  );
-}
-
-function PreviewFrame({ html, title }: { html: string; title: string }) {
-  return (
-    <div className="add-preview" role="region" aria-label={title}>
-      {html ? <iframe srcDoc={html} sandbox="" title={title} tabIndex={-1} scrolling="no" /> : <p>Nothing to preview yet.</p>}
-    </div>
-  );
-}
+import { SelectField, ColorField, RangeField, CheckField, PreviewFrame } from "@/features/match/template-editor/fields";
 
 export default function AddTemplate({
   save,

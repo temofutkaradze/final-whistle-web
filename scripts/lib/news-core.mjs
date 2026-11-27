@@ -8,7 +8,8 @@ import {newsImageFileId} from '../../src/lib/news/conversation.ts';
 export const NEWS_HELP = HELP+'\n\nStandings: send a photo caption such as Premier League 15 16 17 18, or /standings to collect messages.\n'+UCL_ROW_HELP;
 export const builtinNewsTemplates = ['single','left','right','breaking'].map(id=>({id,layout:id,config:DEFAULT_NEWS_STYLE,name:({single:'Single',left:'Circle Left',right:'Circle Right',breaking:'BREAKING'})[id]}));
 const hash=value=>createHash('sha256').update(value).digest('hex');
-const safeCodes=new Set(['NEWS_RENDER_AUTH','NEWS_RENDER_PROTOCOL','NEWS_RENDER_UNAVAILABLE','NEWS_RENDER_FAILED','NEWS_RENDER_OUTPUT']);
+const safeCodes=new Set(['NEWS_RENDER_AUTH','NEWS_RENDER_PROTOCOL','NEWS_RENDER_UNAVAILABLE','NEWS_RENDER_FAILED','NEWS_RENDER_OUTPUT','NEWS_MANUAL_LAYOUT_UNSAFE']);
+const manualHeadlineRecoveryChoices={reply_markup:{keyboard:[[{text:'Change headline'},{text:'Change offset'}],[{text:'Cancel'}]],resize_keyboard:true,one_time_keyboard:true}};
 
 // Security/linking and durable deduplication wrap the original conversation.
 // Standings is opt-in; original News behavior and at-most-once delivery remain unchanged.
@@ -41,6 +42,8 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
     let phase='parse';
     let output;
     let delivered=false;
+    let transition;
+    let manualRecovery;
     try{
       const raw=settings.pending;
       const uploaded=newsImageFileId(msg);
@@ -77,7 +80,6 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       }
       const brandingChoices={reply_markup:{keyboard:[[{text:'Yes'},{text:'No'}]],resize_keyboard:true,one_time_keyboard:true}};
       const brandingAnswer=raw?.stage==='branding'&&!newsImageFileId(msg)&&!/^\//.test((msg.text??'').trim());
-      let transition;
       if(brandingAnswer){
         if(now()-(raw.ts??0)>3600000){
           transition={pending:null,reply:'This post expired. Send a new background image.'};
@@ -105,6 +107,9 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       if('job' in transition&&!brandingAnswer){
         transition={pending:{stage:'branding',background:transition.background,circle:transition.circle??null,job:transition.job,ts:now()},reply:'Add branding?',replyOptions:brandingChoices};
       }
+      if('job' in transition&&transition.job.editorial?.template==='large-headline'&&transition.job.editorial.layoutMode==='manual'){
+        manualRecovery={stage:'editorial',background:transition.background,circle:null,template:'large-headline',layoutMode:'manual',step:'fit',bottomOffset:transition.job.editorial.bottomOffset,headline:transition.job.editorial.headline,ts:now()};
+      }
       const state='job' in transition?{stage:'rendering',requestId:update.update_id}:transition.pending??{};
       const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:state}});
       if(!saved.count||!isActive())return;
@@ -128,6 +133,11 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       phase='commit';
       await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'delivered',requestId:update.update_id}}});
     }catch(error){
+      if(error?.code==='NEWS_MANUAL_LAYOUT_UNSAFE'&&manualRecovery&&isActive()){
+        const restored=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:manualRecovery}}).catch(()=>({count:0}));
+        if(restored.count&&isActive())await reply('That manual headline cannot fit safely at this size and offset. Change the headline or offset; the renderer will not reflow your lines.',manualHeadlineRecoveryChoices).catch(()=>{});
+        return;
+      }
       // The original graph has no Telegram error branch. Keep failures out of the
       // chat and expose a classified operator diagnostic, never raw credentials.
       const code=delivered?'NEWS_DELIVERED_STATE_FAILED':safeCodes.has(error?.code)?error.code:error?.telegramCode===401?'NEWS_TELEGRAM_AUTH':phase==='send'?(Number.isInteger(error?.telegramCode)?'NEWS_TELEGRAM_SEND_REJECTED':'NEWS_DELIVERY_UNCERTAIN'):`NEWS_${phase.toUpperCase()}_FAILED`;

@@ -76,7 +76,7 @@ export interface Job {
   branding?: boolean;
   brandingOnly?: boolean;
   breakingText?: boolean;
-  editorial?: {template:import('./editorial.ts').EditorialTemplate;version?:1|2;headline:string;subtitle:string};
+  editorial?: {template:import('./editorial.ts').EditorialTemplate;version?:1|2;layoutMode?:'automatic'|'manual';bottomOffset?:number;headline:string;subtitle:string};
   layout: 'single' | 'left' | 'right' | 'breaking';
   author: string;
   quote: string;

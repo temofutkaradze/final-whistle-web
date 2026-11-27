@@ -49,6 +49,12 @@ describe('News actual shared Chromium and Sharp pipeline',()=>{
     const good=await fetch(`http://127.0.0.1:${port}/news-health`,{headers:auth});expect(await good.json()).toEqual({service:'final-whistle-news',protocolVersion:2});
     const bad=await fetch(`http://127.0.0.1:${port}/news-health`,{headers:{'x-news-render-secret':'wrong'}});expect(bad.status).toBe(401);
   });
+  it('returns a specific safe-fit error for an impossible Manual Large Headline',async()=>{
+    const headline=Array.from({length:38},(_,i)=>`LINE ${i+1}`).join('\n');
+    const job={layout:'single',author:'',quote:headline,caption:'',pos:{b:[50,50,1],c:[50,30,1]},editorial:{template:'large-headline',layoutMode:'manual',bottomOffset:128,headline,subtitle:''}};
+    const response=await post({job,background:background.toString('base64'),circle:null});
+    expect(response.status).toBe(422);expect(await response.json()).toMatchObject({code:'NEWS_MANUAL_LAYOUT_UNSAFE'});
+  },90_000);
   for(const layout of ['single','left','right','breaking'] as const)it('renders '+layout+' as a native lossless 2160 x 2700 PNG',async()=>{
     const job=buildJob(layout==='breaking'?'BREAKING | A NEW CHAPTER':'FINAL WHISTLE | THE NEXT CHAPTER STARTS *HERE*',['left','right'].includes(layout),layout);
     const response=await post({job,background:background.toString('base64'),circle:['left','right'].includes(layout)?secondary.toString('base64'):null});

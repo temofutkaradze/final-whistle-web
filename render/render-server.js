@@ -37,7 +37,7 @@ const {prepareCustomDocument}=require('./custom-resources.js');
 const { chromium } = require('playwright');
 const sharp = require('sharp');
 const security = require('./security.js');
-const {createSingleFlight,createMetrics,withPageDeadline,createCapturePolicy,createDrainTracker}=require('./operations.js');
+const {createMetrics,withPageDeadline,createDrainTracker}=require('./operations.js');
 const EMPTY_IMAGE='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
 
 const PORT = Number(process.env.RENDER_PORT) || 4500;
@@ -149,231 +149,28 @@ const KEEP_ORIGINAL_COLOR_LEAGUES = new Set([135, 78]); // 135 = Serie A, 78 = B
 
 // Remote logos (team / league URLs coming from the API) are downloaded once and reused from disk.
 // The picture is identical (same bytes); it just does not depend on the network at render time.
-const LOGO_CACHE_DIR = path.join(ROOT, 'cache', 'logos');
-const LOGO_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // re-download after 14 days
-const LOGO_DOWNLOAD_TIMEOUT_MS = 8000;
-
-// ---------------------------------------------------------------------------------------------
-// Grain
-// ---------------------------------------------------------------------------------------------
-
-// Grain image is identical for every render, so it is generated once and reused.
-let grainPromise = null;
-function getGrain() {
-  if (!grainPromise) {
-    grainPromise = sharp({
-      create: {
-        width: FINAL_WIDTH,
-        height: FINAL_HEIGHT,
-        channels: 3,
-        background: { r: 128, g: 128, b: 128 },
-        noise: { type: 'gaussian', mean: 128, sigma: GRAIN_SIGMA },
-      },
-    }).png().toBuffer();
-  }
-  return grainPromise;
-}
 
 // ---------------------------------------------------------------------------------------------
 // Logo cache
 // ---------------------------------------------------------------------------------------------
 
 // <logo-cache>
-const LOGO_EXTS = ['png', 'jpg', 'svg', 'webp', 'gif'];
-
-function findCachedLogo(key, allowStale) {
-  for (const ext of LOGO_EXTS) {
-    const p = path.join(LOGO_CACHE_DIR, `${key}.${ext}`);
-    try {
-      const st = fs.statSync(p);
-      if (st.size<=5*1024*1024 && (allowStale || Date.now() - st.mtimeMs < LOGO_CACHE_MAX_AGE_MS)) {security.insideFile(p,[LOGO_CACHE_DIR]);return p;}
-    } catch (e) { /* not cached with this extension */ }
-  }
-  return null;
-}
-
-function extFromContentType(contentType, url) {
-  const ct = String(contentType || '').toLowerCase();
-  if (ct.includes('svg')) return 'svg';
-  if (ct.includes('jpeg') || ct.includes('jpg')) return 'jpg';
-  if (ct.includes('webp')) return 'webp';
-  if (ct.includes('gif')) return 'gif';
-  if (ct.includes('png')) return 'png';
-  const m = String(url).toLowerCase().match(/\.(png|jpe?g|svg|webp|gif)(\?|$)/);
-  if (m) return m[1] === 'jpeg' ? 'jpg' : m[1];
-  return 'png';
-}
-
-const logoFlights=createSingleFlight(16);
-
-// Canonicalize first: every HTTP(S) image goes through the pinned downloader.
-async function localizeImage(url) {
-  url=security.imageSource(url,{fileDirectories:ALLOWED_FILE_DIRS});
-  if (!/^https?:/.test(url)) return url;
-  const key = crypto.createHash('sha1').update(String(url)).digest('hex');
-  const toFileUrl = (p) => pathToFileURL(p).href;
-  return logoFlights.run(key,async()=>{
-    try {
-      const fresh = findCachedLogo(key, false);
-      if (fresh) return toFileUrl(fresh);
-
-      fs.mkdirSync(LOGO_CACHE_DIR, { recursive: true });
-      const resource = await security.downloadPublicResource(String(url), {timeoutMs:LOGO_DOWNLOAD_TIMEOUT_MS,maxBytes:5*1024*1024});
-      const buf = resource.body;
-      if (buf.length < 64) throw new Error('response too small to be an image');
-
-      if(!resource.contentType.startsWith('image/'))throw new Error('Invalid image response');
-      await security.validateMatchImage(buf);
-      const ext = extFromContentType(resource.contentType, url);
-      const finalPath = path.join(LOGO_CACHE_DIR, `${key}.${ext}`);
-      const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-      fs.writeFileSync(tmpPath, buf);
-      fs.renameSync(tmpPath, finalPath);
-      return toFileUrl(finalPath);
-    } catch (e) {
-      // Download failed: an expired cached copy is still better than a broken image
-      const stale = findCachedLogo(key, true);
-      if (stale) {
-        console.warn("Logo download unavailable; using the cached image.");
-        return toFileUrl(stale);
-      }
-      console.warn("Logo download unavailable; using a transparent fallback.");
-      return EMPTY_IMAGE;
-    }
-  });
-}
+const { localizeImage } = require('./assets-runtime/logo-cache.js')({ ROOT, ALLOWED_FILE_DIRS, EMPTY_IMAGE, security });
 // </logo-cache>
 
 // ---------------------------------------------------------------------------------------------
 // Browser
 // ---------------------------------------------------------------------------------------------
 
-let browserPromise = null;
-let currentBrowser = null;
-function getBrowser() {
-  if (!browserPromise) {
-    browserPromise = chromium.launch()
-      .then((browser) => {
-        currentBrowser = browser;
-        // If Chromium dies, start a fresh one on the next render instead of failing until a restart
-        browser.on('disconnected', () => {
-          if (currentBrowser === browser) {
-            console.warn('Browser disconnected; a new one will be started on the next render.');
-            browserPromise = null;
-            contextPromise = null;
-            currentBrowser = null;
-          }
-        });
-        return browser;
-      })
-      .catch((err) => {
-        browserPromise = null;
-        throw err;
-      });
-  }
-  return browserPromise;
-}
-
-// One shared browser context: its cache survives between renders, so the Google Fonts files are
-// downloaded only once instead of on every render (faster and more reliable).
-// CSS coordinate system stays 1080x1350; deviceScaleFactor 2 renders it at 2160x2700 physical pixels.
-let contextPromise = null;
-function getContext() {
-  if (!contextPromise) {
-    contextPromise = getBrowser()
-      .then((browser) => browser.newContext({ viewport: { width: 1080, height: 1350 }, deviceScaleFactor: 2 }))
-      .catch((err) => {
-        contextPromise = null;
-        throw err;
-      });
-  }
-  return contextPromise;
-}
-
-// Explicit shutdown only. Request failures must never close other in-flight contexts.
-async function resetBrowser() {
-  const b = browserPromise;
-  browserPromise = null;
-  contextPromise = null;
-  currentBrowser = null;
-  try { const browser = await b; if (browser) await browser.close(); } catch (e) { /* already gone */ }
-}
+const { getBrowser, getContext, resetBrowser } = require('./runtime/browser.js')({ chromium });
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function withTimeout(promise, ms, label) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-// ---------------------------------------------------------------------------------------------
-// Screenshot (2160x2700) and final image (1080x1350 JPEG)
-// ---------------------------------------------------------------------------------------------
-
-// Same pixels as page.screenshot(): the PNG is lossless, we only ask Chromium for its fast PNG
-// encoder because this PNG is just an in-memory step (file size does not matter).
-// If that is unavailable or returns an unexpected size, the standard screenshot is used instead.
-const capturePolicy=createCapturePolicy();
-async function captureHiRes(page, context) {
-  if (capturePolicy.enabled) {
-    let client = null;
-    try {
-      client = await context.newCDPSession(page);
-      const { data } = await withTimeout(
-        client.send('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true }),
-        60000,
-        'fast screenshot'
-      );
-      const buf = Buffer.from(data, 'base64');
-      const meta = await sharp(buf).metadata();
-      if (meta.width === HIRES_WIDTH && meta.height === HIRES_HEIGHT) {capturePolicy.success();return buf;}
-      if(capturePolicy.failure())console.warn('Fast capture disabled after three qualifying failures.');
-      console.warn(`Fast capture returned ${meta.width}x${meta.height}; using the standard screenshot instead.`);
-    } catch (e) {
-      // A stall retries on a new page; it never disables CDP or closes the shared browser.
-      if (/timed out/.test(String(e.message))) throw e;
-      if(capturePolicy.failure(e))console.warn('Fast capture disabled after three qualifying failures.');
-      console.warn('Fast capture not available, using the standard screenshot:', String(e.message).split('\n')[0]);
-    } finally {
-      if (client) await client.detach().catch(() => {});
-    }
-  }
-  return page.screenshot({ type: 'png', scale: 'device', animations: 'disabled', timeout: 120000 });
-}
-
-// 2160x2700 PNG buffer -> 1080x1350 tagged sRGB JPEG buffer (Lanczos3 downscale)
-async function makeJpeg(pngBuffer, { grain = true } = {}) {
-  let img = sharp(pngBuffer)
-    .flatten({ background: '#000000' })          // no alpha channel in the JPEG
-    .resize(FINAL_WIDTH, FINAL_HEIGHT, { fit: 'fill', kernel: sharp.kernel.lanczos3 })
-    .toColourspace('srgb');
-  if (grain && GRAIN_SIGMA > 0) {
-    img = img.composite([{ input: await getGrain(), blend: 'soft-light' }]);
-  }
-  return img.withIccProfile('srgb').jpeg({ quality: JPEG_QUALITY, chromaSubsampling: '4:4:4' }).toBuffer();
-}
-
-// Wait until web fonts and every <img> (background, logos) are loaded and decoded, and one frame was painted,
-// so nothing is captured with fallback fonts or half-loaded images.
-async function waitUntilReady(page) {
-  await page.evaluate(async () => {
-    if (document.fonts && document.fonts.ready) await document.fonts.ready;
-    await Promise.all(
-      Array.from(document.images).map((img) =>
-        img.decode ? img.decode().catch(() => {}) : Promise.resolve()
-      )
-    );
-    await Promise.race([
-      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
-      new Promise((r) => setTimeout(r, 500)),
-    ]);
-  });
-}
+const { captureHiRes, makeJpeg, waitUntilReady } = require('./runtime/image-export.js')({
+  sharp, FINAL_WIDTH, FINAL_HEIGHT, HIRES_WIDTH, HIRES_HEIGHT, JPEG_QUALITY, GRAIN_SIGMA
+});
 
 // ---------------------------------------------------------------------------------------------
 // HTTP server
@@ -388,120 +185,7 @@ const renderNews = require("./news-renderer.js")({
 });
 
 
-async function handleNewsRequest(req, res, signal) {
-  const secret = process.env.NEWS_RENDER_SECRET;
-  const supplied = req.headers["x-news-render-secret"];
-
-  const expectedBuffer = Buffer.from(secret || "");
-  const suppliedBuffer = Buffer.from(
-    typeof supplied === "string" ? supplied : ""
-  );
-
-  if (
-    !secret ||
-    expectedBuffer.length !== suppliedBuffer.length ||
-    !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
-  ) {
-    res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Unauthorized" }));
-    return;
-  }
-  if (req.method === 'GET' && req.url === '/news-health') {
-    res.writeHead(200, { 'Content-Type':'application/json', 'Cache-Control':'no-store' });
-    res.end(JSON.stringify({service:'final-whistle-news',protocolVersion:2}));
-    return;
-  }
-
-  const MAX_BYTES = 45 * 1024 * 1024;
-  let chunks = [];
-  let total = 0;
-
-  try {
-    for await (const chunk of req) {
-      total += chunk.length;
-
-      if (total > MAX_BYTES) {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Request too large" }));
-        return;
-      }
-
-      chunks.push(chunk);
-    }
-
-    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-
-    
-    const job = payload.job;
-
-    if (
-      !job ||
-      typeof job !== "object" ||
-      Array.isArray(job) ||
-      !["single", "left", "right", "breaking", "standings"].includes(job.layout) ||
-      typeof job.quote !== "string" ||
-      typeof job.author !== "string" ||
-      typeof job.caption !== "string" ||
-      job.quote.length > 4096 ||
-      job.author.length > 4096 ||
-      job.caption.length > 4096 ||
-      !job.pos ||
-      typeof job.pos !== "object"
-    ) {
-      throw new Error("Invalid News job");
-    }
-
-    function validPosition(value) {
-      return (
-        Array.isArray(value) &&
-        value.length === 3 &&
-        value.every((n) => typeof n === "number" && Number.isFinite(n))
-      );
-    }
-
-    if (!validPosition(job.pos.b) || !validPosition(job.pos.c)) {
-      throw new Error("Invalid image position");
-    }
-
-    function decodeImage(value, required) {
-      if (value == null && !required) return null;
-
-      if (
-        typeof value !== "string" ||
-        !value.length ||
-        value.length > 30 * 1024 * 1024 ||
-        !/^[A-Za-z0-9+/]+={0,2}$/.test(value) ||
-        value.length % 4 !== 0
-      ) {
-        throw new Error("Invalid image data");
-      }
-
-      const buffer = Buffer.from(value, "base64");
-
-      if (!buffer.length || buffer.length > 20 * 1024 * 1024) {
-        throw new Error("Invalid image size");
-      }
-
-      return buffer;
-    }
-
-    const background = decodeImage(payload.background, true);
-    const circle = decodeImage(payload.circle, false);
-
-    signal?.throwIfAborted();
-    const result = await renderNews(job, background, circle,signal);
-
-
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(result));
-  } catch (error) {
-    console.error("[news render]", error.message);
-
-    if(res.destroyed)return;
-    res.writeHead(signal?.aborted?504:500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "News rendering failed" }));
-  }
-}
+const handleNewsRequest = require('./news/http-handler.js')({ renderNews });
 
 const renderGate=security.createRenderGate();
 const metrics=createMetrics();

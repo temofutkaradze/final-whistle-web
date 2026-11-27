@@ -50,6 +50,10 @@ export async function renderNewsPost(
     }),
     signal: AbortSignal.timeout(120000),
   }); } catch { throw new NewsRenderError('NEWS_RENDER_UNAVAILABLE','The local renderer cannot be reached.'); }
+  if(response.status===422){
+    const result=await response.json().catch(()=>null);
+    if(result?.code==='NEWS_MANUAL_LAYOUT_UNSAFE')throw new NewsRenderError('NEWS_MANUAL_LAYOUT_UNSAFE','The manual Large Headline does not fit safely. Adjust the headline or bottom offset.');
+  }
   checkStatus(response.status);
 
   const data = (await response.json()) as {
