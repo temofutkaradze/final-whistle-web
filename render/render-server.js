@@ -33,10 +33,10 @@ const PRIVATE_TEMP = path.resolve(__dirname, '..', 'storage', 'renderer-tmp');
 fs.mkdirSync(PRIVATE_TEMP,{recursive:true,mode:0o700});
 process.env.TEMP=process.env.TMP=process.env.TMPDIR=PRIVATE_TEMP;
 const crypto = require('crypto');
-const { leagueAccents } = require('./league-accents.js');
+const { matchLeagueAccents: leagueAccents } = require('./match-accents.js');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { leagueLogoSize } = require('./league-logo-sizing.js');
-const { competitionLabel, applyMatchPresentation, fitMatchComposition } = require('./match-presentation.js');
+const { competitionPresentation, competitionSymbolSize, applyMatchPresentation, fitMatchComposition } = require('./match-presentation.js');
 const {alignBranding}=require('./branding-position.js');
 const { checkTemplateHtml, withCsp } = require('./template-check.js');
 const {expandPlaceholders}=require('./final-document.js');
@@ -257,11 +257,18 @@ const server = http.createServer(async (req,res) => {
       // Decide how the league logo is shown (see LEAGUE_LOGO_DIR comment above)
       const leagueIdMatch = String(d.league_logo || '').match(/leagues\/(\d+)/);
       const leagueId = Number.isSafeInteger(d.league_id) && d.league_id > 0 ? d.league_id : leagueIdMatch ? Number(leagueIdMatch[1]) : null;
-      const leagueLabel = !isCustom ? competitionLabel(leagueId) : null;
+      const marker = !isCustom ? competitionPresentation({leagueId,homeTeamId:d.home_team_id,awayTeamId:d.away_team_id}) : null;
+      const leagueLabel = marker?.kind === 'label' ? marker.label : null;
       let leagueLogoSrc = d.league_logo;
       let leagueLogoClass = 'league-logo';
       let leagueLogoIsRemote = true;
-      if (leagueId) {
+      if (marker?.kind === 'symbol') {
+        const localLogo = path.join(LEAGUE_LOGO_DIR, 'symbols', marker.asset);
+        if (!fs.existsSync(localLogo)) throw Object.assign(new Error('Competition symbol asset is missing'),{statusCode:500});
+        leagueLogoSrc = pathToFileURL(localLogo).href;
+        leagueLogoClass += ' no-filter competition-symbol';
+        leagueLogoIsRemote = false;
+      } else if (leagueId) {
         const symbolLogo = path.join(LEAGUE_LOGO_DIR, 'symbols', `${leagueId}.png`);
         const useSymbol = !isCustom && fs.existsSync(symbolLogo);
         const localLogo = useSymbol ? symbolLogo : path.join(LEAGUE_LOGO_DIR, `${leagueId}.png`);
@@ -323,10 +330,10 @@ const server = http.createServer(async (req,res) => {
 
       html = expandPlaceholders(html,replacements);
 
-      const leagueSize = !isCustom ? leagueLogoSize(leagueId) : null;
+      const leagueSize = !isCustom ? (marker?.kind === 'symbol' ? competitionSymbolSize(marker.key) : leagueLogoSize(leagueId)) : null;
       const leagueSizeStyle = leagueSize ? ` style="width:${leagueSize.width}px;height:${leagueSize.height}px"` : '';
       html = html.replace('class="league-logo"', `class="${leagueLogoClass}"${leagueSizeStyle}`);
-      if (!isCustom) html = applyMatchPresentation(html, {leagueId, template:d.template || DEFAULT_TEMPLATE});
+      if (!isCustom) html = applyMatchPresentation(html, {leagueId,homeTeamId:d.home_team_id,awayTeamId:d.away_team_id,template:d.template || DEFAULT_TEMPLATE,accents});
 
       // Last transformation: canonical checked bytes + immutable image manifest.
       // Never interpolate or otherwise mutate HTML after this boundary.

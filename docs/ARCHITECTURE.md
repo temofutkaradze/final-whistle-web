@@ -2,6 +2,14 @@
 
 ## Scope and organization
 
+### Pending Match fixture coverage extension
+
+[match-coverage.mjs](../scripts/lib/match-coverage.mjs) owns the exact-ID additional-team predicate, reference official Inter Miami competition allowlist and discovery policy version. [config.mjs](../scripts/lib/config.mjs) retains the existing league configuration plus Europa; [leagues.ts](../src/lib/leagues.ts) exposes dashboard league labels and the shared featured-team list. Team IDs and league IDs must never be conflated. Unknown Miami competitions fail closed until their metadata is verified; configured existing competition rules remain authoritative.
+
+The [date loader](../scripts/lib/football.mjs) still fetches a broad UTC-date response, filters it locally, upserts each fixture once and records a policy-aware FixtureDay marker. The [list helper](../scripts/lib/match-list.mjs) ensures only the UTC dates required by the existing local-day/four-hour visibility window. Cache and in-flight reuse remain shared across users; no per-user/team polling was added. The existing worker parser recognizes `|coverage-v1` so existing FixtureDay retention also covers new keys.
+
+Featured favorites can be saved by exact supported IDs without inserting synthetic Team records because FavoriteTeam has no Team foreign key. Existing owner/session scoping and private Telegram access remain unchanged. New fixtures enter the existing worker, event and rendering pipeline. [match-presentation.js](../render/match-presentation.js) maps exact competition/team identities to local symbols or concise labels, while the Match-only [match-accents.js](../render/match-accents.js) mirrors each marker's left gradient with the opposite CSS direction. The shared [league-accents.js](../render/league-accents.js) remains unchanged for News standings. Local symbols live under [render/assets/leagues/symbols](../render/assets/leagues/symbols) and pass the existing SVG validator. No migration, renderer fork or News change is involved. See [current status](../PROJECT_STATUS.md) for verification limits and API request costs.
+
 Final Whistle has four separately launched Node processes in addition to the
 Next.js website: the renderer, Match bot manager, Match worker, and News bot
 manager. They are not Next.js background tasks. Keep their public entry points,

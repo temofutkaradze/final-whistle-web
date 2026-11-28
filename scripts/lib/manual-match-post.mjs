@@ -33,7 +33,7 @@ export async function regenerateAssignedMatches({prisma,userId,backgroundPath,fi
       }
       const jpg=await renderPost({fixture_id:`manual_${match.fixtureId}_${randomUUID()}`,
         ...await brandLookFields(brand),...custom,background_path:backgroundPath,
-        league_id:match.leagueId,league_logo:match.leagueLogo,home_logo:match.homeLogo,away_logo:match.awayLogo,
+        league_id:match.leagueId,league_logo:match.leagueLogo,home_team_id:match.homeTeamId,away_team_id:match.awayTeamId,home_logo:match.homeLogo,away_logo:match.awayLogo,
         home_team:match.homeTeam,away_team:match.awayTeam,home_score:match.homeScore,away_score:match.awayScore,
         ...buildEventsHtml(match.eventsJson??[],{home_team_id:match.homeTeamId,away_team_id:match.awayTeamId,home_team:match.homeTeam,away_team:match.awayTeam,home_score:match.homeScore,away_score:match.awayScore})});
       await cleanupMatchHtml(jpg).catch(()=>{});

@@ -7,7 +7,7 @@ const extra = (process.env.EXTRA_LEAGUES ?? "")
   .map((s) => Number(s.trim()))
   .filter((n) => Number.isInteger(n) && n > 0);
 
-export const FAVORITE_LEAGUES = new Set([39, 140, 135, 78, 61, 2, 5, ...extra]);
+export const FAVORITE_LEAGUES = new Set([39, 140, 135, 78, 61, 2, 5, 3, ...extra]);
 
 // Day boundaries and kickoff times shown to the customer. Demo default = your time zone.
 export const TZ = process.env.DISPLAY_TZ || "Asia/Tbilisi";

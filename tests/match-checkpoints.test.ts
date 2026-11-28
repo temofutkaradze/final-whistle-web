@@ -20,11 +20,11 @@ describe('cached cross-midnight list',()=>{
     db.tables.match.push({fixtureId:1,day:'2026-11-12',kickoff:new Date('2026-11-12T23:00:00+04:00'),leagueId:39,homeTeam:'Alpha',awayTeam:'Beta',homeTeamId:1,awayTeamId:2},
       {fixtureId:2,day:'2026-11-13',kickoff:at('00:05'),leagueId:140,homeTeam:'Gamma',awayTeam:'Delta',homeTeamId:3,awayTeamId:4});
   });
-  it.each(['00:00','00:30','02:00','02:59','03:00','03:01'])('handles the inclusive boundary at %s without fetching another day',async time=>{
+  it.each(['00:00','00:30','02:00','02:59','03:00','03:01'])('handles the inclusive boundary at %s while ensuring both required UTC dates',async time=>{
     const ensureDay=vi.fn();const now=at(time);
     const rows=await listAvailableMatches({prisma:db.prisma,ensureDay,localDayRange:(ignored:unknown,d:Date)=>localDayRange('Asia/Tbilisi',d),now});
     expect(rows.map(r=>r.fixtureId)).toEqual(time==='03:01'?[2]:[1,2]);
-    expect(ensureDay.mock.calls).toEqual([['2026-11-13']]);
+    expect(ensureDay.mock.calls).toEqual([['2026-11-12'],['2026-11-13']]);
     expect(new Set(rows.map(r=>r.fixtureId)).size).toBe(rows.length);
   });
   it('keeps current-day fixtures even after four hours; preserves filters, favorites, search and UTC/local boundaries',async()=>{
@@ -48,7 +48,7 @@ describe('cached cross-midnight list',()=>{
       {fixtureId:10,day:'2026-11-13',kickoff:new Date('2026-11-13T00:15:00-05:00')});
     const ensureDay=vi.fn();
     const rows=await listAvailableMatches({prisma:db.prisma,ensureDay,localDayRange:(_:unknown,d:Date)=>localDayRange('America/New_York',d),now:new Date('2026-11-13T03:01:00-05:00')});
-    expect(rows.map(r=>r.fixtureId)).toEqual([10]);expect(ensureDay.mock.calls).toEqual([['2026-11-13']]);
+    expect(rows.map(r=>r.fixtureId)).toEqual([10]);expect(ensureDay.mock.calls).toEqual([['2026-11-13'],['2026-11-14']]);
   });
 });
 

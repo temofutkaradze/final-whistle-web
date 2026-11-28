@@ -8,7 +8,11 @@ const templates=['classic','panel','frame','stripe'];
 
 describe('built-in Match composition and competition labels',()=>{
  it('maps exact API-Football identities without inferring subscription access',()=>{
-  expect(competitionLabel(5)).toBe('UNL');expect(competitionLabel(6)).toBe('CAF');
+  expect(competitionLabel(5)).toBe('UNL');expect(competitionLabel(6)).toBe('CAF');expect(competitionLabel(3)).toBe('UEL');
+  for(const template of templates){
+   const html=applyMatchPresentation(readFileSync(`render/templates/${template}.html`,'utf8'),{leagueId:3,template});
+   expect(html).not.toContain('<span class="competition-label">UEL</span>');
+  }
   for(const id of [undefined,39,135,'5',NaN,999])expect(competitionLabel(id)).toBeNull();
  });
  it('moves every related element together and reserves clearance for eight scorer rows',async()=>{

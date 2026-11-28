@@ -94,6 +94,8 @@ export function createWorkerCore(deps) {
       ...(await pickBackground(sel, brand)),
       league_id: match.leagueId,
       league_logo: match.leagueLogo,
+      home_team_id: match.homeTeamId,
+      away_team_id: match.awayTeamId,
       home_logo: match.homeLogo,
       away_logo: match.awayLogo,
       home_team: match.homeTeam,
@@ -447,7 +449,7 @@ export function createWorkerCore(deps) {
       where: { OR: [{date:{lt:cutoffDay}}, {date:{gte:'utc:',lt:'utc:'+cutoffDay}}] }, select:{date:true}, take:50,
     });
     const expired = days.filter(({date}) => {
-      const parsed = /^(?:([0-9]{4}-[0-9]{2}-[0-9]{2})|utc:([0-9]{4}-[0-9]{2}-[0-9]{2})\|[0-9]+(?:,[0-9]+)*)$/.exec(date);
+      const parsed = /^(?:([0-9]{4}-[0-9]{2}-[0-9]{2})|utc:([0-9]{4}-[0-9]{2}-[0-9]{2})\|[0-9]+(?:,[0-9]+)*(?:\|coverage-v1)?)$/.exec(date);
       const day = parsed?.[1] ?? parsed?.[2];
       if (!day || day >= cutoffDay) return false;
       const value = new Date(day+'T00:00:00.000Z');

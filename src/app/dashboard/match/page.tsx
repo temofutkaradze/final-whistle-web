@@ -5,7 +5,7 @@ import { brandInnerHtml } from "@/lib/sample-match";
 import { SITE } from "@/lib/site";
 import { normalizeConfig } from "@/lib/template-builder";
 import { logoDataUri } from "@/lib/logos";
-import { LEAGUES } from "@/lib/leagues";
+import { LEAGUES, FEATURED_MATCH_TEAMS } from "@/lib/leagues";
 import { requireUser } from "@/lib/auth";
 import TemplatePicker from "../template-picker";
 import AddTemplate, { type Editing } from "../add-template";
@@ -349,7 +349,7 @@ export default async function Dashboard({
           <form className="plain" action={saveFilters} style={{ marginTop: 12 }}>
             <div>
               {LEAGUES.map((l) => {
-                const clubs = allTeams.filter((t) => t.leagueId === l.id);
+                const clubs = allTeams.filter((t) => t.leagueId === l.id && !FEATURED_MATCH_TEAMS.some(featured=>featured.id===t.id));
                 const isLeagueChosen = chosenLeagues.has(l.id);
                 const selectedClubsInLeague = clubs.filter((t) => chosenTeams.has(t.id)).length;
                 return (
@@ -389,6 +389,14 @@ export default async function Dashboard({
                 );
               })}
             </div>
+            <details className="lrow">
+              <summary className="lrow-summary"><span className="lrow-title">National teams and Inter Miami</span></summary>
+              <div className="lrow-body"><div className="clubs">
+                {FEATURED_MATCH_TEAMS.map(team=><label className="check" key={team.id} htmlFor={`team-${team.id}`}>
+                  <input id={`team-${team.id}`} type="checkbox" name="teams" value={team.id} defaultChecked={chosenTeams.has(team.id)}/>{team.name}
+                </label>)}
+              </div></div>
+            </details>
             <SubmitButton label="Save leagues & clubs" pendingLabel="Saving..." variant="default" style={{ marginTop: 16 }} />
             {saved === "1" && <p className="notice ok" role="status" style={{ marginTop: 14 }}>Saved. Send /matches in Telegram to see the new list.</p>}
           </form>

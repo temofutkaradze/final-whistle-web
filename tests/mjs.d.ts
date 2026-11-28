@@ -39,6 +39,7 @@ declare module "*/scripts/lib/football.mjs" {
   export const isFinished: (status: string) => boolean;
   export const isDead: (status: string) => boolean;
   export function ensureDay(date:string):Promise<void>;
+  export function apiGet(endpoint:string,params:Record<string,string|number>):Promise<any[]>;
   export function refreshStatuses(date:string,matches:any[]):Promise<void>;
 }
 

@@ -4,6 +4,7 @@
 import { prisma } from "./db.mjs";
 import { DAILY_API_LIMIT, DEAD, FAVORITE_LEAGUES, FINISHED } from "./config.mjs";
 import { checkpointFromFixture } from './live-checkpoint.mjs';
+import {includesMatchFixture,MATCH_COVERAGE_VERSION} from './match-coverage.mjs';
 
 const BASE = "https://v3.football.api-sports.io";
 
@@ -65,11 +66,11 @@ export function ensureDay(date) {
 
 async function loadDay(date) {
   // The key includes the league list, so changing EXTRA_LEAGUES re-downloads today's list once.
-  const key = `utc:${date}|${[...FAVORITE_LEAGUES].sort((a, b) => a - b).join(",")}`;
+  const key = `utc:${date}|${[...FAVORITE_LEAGUES].sort((a, b) => a - b).join(",")}|${MATCH_COVERAGE_VERSION}`;
   if (await prisma.fixtureDay.findUnique({ where: { date: key } })) return;
 
   const fixtures = await apiGet("fixtures", { date }); // "date" is a UTC day
-  const wanted = fixtures.filter((f) => FAVORITE_LEAGUES.has(f.league.id) && !["PST", "CANC"].includes(f.fixture.status.short));
+  const wanted = [...new Map(fixtures.filter((f) => includesMatchFixture(f,FAVORITE_LEAGUES) && !["PST", "CANC"].includes(f.fixture.status.short)).map(f=>[f.fixture.id,f])).values()];
   const storedTeams=new Set();
 
   for (const f of wanted) {

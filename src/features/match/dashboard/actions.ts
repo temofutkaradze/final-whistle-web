@@ -11,7 +11,7 @@ import { MAX_CUSTOM_TEMPLATES, customTemplateId, isBuiltinTemplate } from "@/lib
 import { SITE } from "@/lib/site";
 import { prepareTemplateInput } from "@/lib/template-input";
 import { MAX_LOGO_UPLOAD, deleteLogoFile, saveLogo } from "@/lib/logos";
-import { LEAGUES } from "@/lib/leagues";
+import { LEAGUES, FEATURED_MATCH_TEAMS } from "@/lib/leagues";
 import { encryptSecret, userBotToken } from "@/lib/crypto";
 import { deleteAccountFiles } from "@/lib/backgrounds";
 import { clearSessionCookie, requireUser } from "@/lib/auth";
@@ -232,9 +232,12 @@ export async function saveFilters(formData: FormData) {
     .map((v) => Number(v))
     .filter((id) => LEAGUES.some((l) => l.id === id));
   const wantedTeams = formData.getAll("teams").map((v) => Number(v)).filter((n) => Number.isInteger(n));
-  const teams = wantedTeams.length
+  const storedTeams = wantedTeams.length
     ? await prisma.team.findMany({ where: { id: { in: wantedTeams } }, select: { id: true } })
     : [];
+  // FavoriteTeam has no Team FK: supported IDs can be followed before their first
+  // discovered fixture, without inventing or seeding production Team metadata.
+  const teams=[...new Map([...storedTeams,...FEATURED_MATCH_TEAMS.filter(t=>wantedTeams.includes(t.id))].map(t=>[t.id,{id:t.id}])).values()];
 
   const sub = await prisma.subscription.findFirst({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
   if (sub) await prisma.subscription.update({ where: { id: sub.id }, data: { leagueIds } });

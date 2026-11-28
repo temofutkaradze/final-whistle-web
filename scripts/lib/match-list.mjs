@@ -1,5 +1,5 @@
 // Preserve the existing day-cache fetch. Visibility follows display-timezone kickoff boundaries,
-// not Match.day (the API/cache day is UTC). Never fetch another day for this extension.
+// not Match.day (the API/cache day is UTC).
 export function matchVisibilityWhere(localDayRange, now = new Date()) {
   const range = localDayRange(undefined, now);
   return { OR: [
@@ -10,7 +10,10 @@ export function matchVisibilityWhere(localDayRange, now = new Date()) {
 
 export async function listAvailableMatches({ prisma, ensureDay, localDayRange, now = new Date() }) {
   const range = localDayRange(undefined, now);
-  await ensureDay(range.date);
+  // Cold caches must cover the same kickoff range the unchanged visibility query
+  // accepts. Warm caches and simultaneous users reuse ensureDay's existing cache.
+  const dates=new Set([...(range.utcDates??[range.date]),new Date(now.getTime()-4*3600e3).toISOString().slice(0,10)]);
+  for(const date of dates)await ensureDay(date);
   return prisma.match.findMany({ where: matchVisibilityWhere(localDayRange, now), orderBy: [{ kickoff: 'asc' }, { fixtureId: 'asc' }] });
 }
 

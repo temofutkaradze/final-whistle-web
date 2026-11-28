@@ -61,7 +61,7 @@ function addUser(id: string, extra: Record<string, unknown> = {}) {
 }
 function addMatch(fixtureId: number, extra: Record<string, unknown> = {}) {
   db.tables.match.push({
-    fixtureId, day: DAY, leagueId: 39, leagueName: "Premier League", leagueLogo: "l", homeTeam: "Alpha FC", awayTeam: "Beta FC", homeLogo: "h", awayLogo: "a",
+    fixtureId, day: DAY, leagueId: 39, leagueName: "Premier League", leagueLogo: "l", homeTeamId: 1, awayTeamId: 2, homeTeam: "Alpha FC", awayTeam: "Beta FC", homeLogo: "h", awayLogo: "a",
     kickoff: new Date(T0 - 120 * MIN), statusShort: "NS", homeScore: null, awayScore: null, eventsJson: null, finishedAt: null, lastCheckedAt: null, ...extra,
   });
   liveStatus[fixtureId] ??= String(extra.statusShort ?? "NS");
@@ -163,7 +163,7 @@ describe("worker: the normal path", () => {
     const core = makeCore();
     await core.tick();
     expect(renderPost).toHaveBeenCalledTimes(1);
-    expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", league_id: 39, home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
+    expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", league_id: 39, home_team_id: 1, away_team_id: 2, home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
     expect(tg.sendDocument).toHaveBeenCalledTimes(1);
     expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Full Time — Alpha FC 2-1 Beta FC",undefined,{beforeDispatch:expect.any(Function)});
     expect(sel("s1")).toMatchObject({ status: "COMPLETED", sentAt: new Date(T0) });
@@ -631,7 +631,7 @@ describe('reference-safe match retention',()=>{
     db.failNext('match','deleteMany',new Error('database unavailable'));await expect(makeCore().cleanup()).rejects.toThrow('database unavailable');expect(unlink).not.toHaveBeenCalled();expect(db.tables.match).toHaveLength(1);
   });
   it('retires valid expired UTC and legacy date keys only, preserving the cutoff and unrelated keys',async()=>{
-    const expired=['utc:2026-10-01|39,78','utc:2026-10-06|39','2026-10-01'];
+    const expired=['utc:2026-10-01|39,78','utc:2026-10-06|39','2026-10-01','utc:2026-10-01|2,3,5,39,61,78,135,140|coverage-v1'];
     const kept=['utc:2026-10-07|39,78','utc:2026-10-10|39','2026-10-07','2026-10-10','!unrelated','utc:2026-10-01|not-a-league','utc:2026-02-31|39','2026-10-01-notes'];
     db.tables.fixtureDay.push(...[...expired,...kept].map(date=>({date})));await makeCore().cleanup();expect(db.tables.fixtureDay.map(x=>x.date)).toEqual(kept);
   });
@@ -812,6 +812,26 @@ describe('retiring only disposable worker state',()=>{
 
 
 describe('shared-bot automatic recipient isolation',()=>{
+ it.each([1,3,5,18])('uses one shared status refresh and %s final-event requests for a new same-day match group',async count=>{
+  for(let i=1;i<=count;i++){addMatch(i,{leagueId:3,homeScore:1,awayScore:0});addSel('expanded-'+i,'u1',i);liveStatus[i]='FT';apiEvents[i]=[GOAL(20)];}
+  await makeCore().tick();
+  expect(football.refreshStatuses).toHaveBeenCalledTimes(1);expect(football.fetchEvents).toHaveBeenCalledTimes(count);expect(tg.sendDocument).toHaveBeenCalledTimes(count);
+ });
+ it('does not poll unselected new fixtures and groups selected fixtures by UTC day, not user',async()=>{
+  addSharedMember();addMatch(1,{leagueId:3,homeScore:1,awayScore:0});addMatch(2,{leagueId:253,day:'2026-10-09',kickoff:new Date(T0-22*3600e3),homeScore:1,awayScore:0});addMatch(3,{leagueId:3});
+  for(const id of [1,2]){addSel('owner-'+id,'u1',id);addSel('delegate-'+id,'delegate',id);liveStatus[id]='FT';apiEvents[id]=[GOAL(20)];}
+  await makeCore().tick();expect(football.refreshStatuses).toHaveBeenCalledTimes(2);expect(football.fetchEvents).toHaveBeenCalledTimes(2);expect(tg.sendDocument).toHaveBeenCalledTimes(4);
+ });
+ it.each([1,3,5])('shares four status rounds and LIVE/final events for %s fixtures selected by both users',async count=>{
+  addSharedMember();let round=0;
+  for(let id=1;id<=count;id++){addMatch(id,{leagueId:id===1?253:3,kickoff:new Date(T0-107*MIN)});addSel('owner-budget-'+id,'u1',id);addSel('delegate-budget-'+id,'delegate',id);apiEvents[id]=[GOAL(20)];}
+  football.refreshStatuses.mockImplementation(async(_day:string,list:{fixtureId:number}[])=>{
+   for(const {fixtureId:id} of list){if(round<3)observeLive(id,90+round,null,1,0);else Object.assign(match(id),{statusShort:'FT',homeScore:1,awayScore:0,lastCheckedAt:new Date(clock.now)});}
+  });
+  const core=makeCore();for(round=0;round<4;round++){await core.tick();advance(1);}
+  expect(football.refreshStatuses).toHaveBeenCalledTimes(4);expect(football.fetchEvents).toHaveBeenCalledTimes(count*2);expect(tg.sendDocument).toHaveBeenCalledTimes(count*4);
+  await core.tick();expect(football.fetchEvents).toHaveBeenCalledTimes(count*2);expect(tg.sendDocument).toHaveBeenCalledTimes(count*4);
+ });
  it('delivers the same final match independently to owner and delegate using their own brand and background',async()=>{
   addSharedMember();finishedWithEvents(1);addSel('owner-final','u1',1);addSel('delegate-final','delegate',1);
   renderPost.mockImplementation(async(payload:any)=>'/tmp/'+payload.fixture_id+'.png');

@@ -1,4 +1,4 @@
-import {leagueAccents} from "../../render/league-accents.js";
+import {matchLeagueAccents as leagueAccents} from "../../render/match-accents.js";
 import {expandPlaceholders} from "../../render/final-document.js";
 // Pure helpers (no Node APIs, safe to import in the browser): the invented sample match used for sample posts and
 // template previews, and the way a template's {{PLACEHOLDERS}} are filled.

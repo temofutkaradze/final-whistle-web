@@ -22,6 +22,11 @@ beforeEach(()=>{vi.resetAllMocks();vi.stubGlobal('React',React);mocks.require.mo
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
 async function action(label:string){const tree=await Dashboard({searchParams:Promise.resolve({})});const fn=findAction(tree,label);expect(fn).toBeTypeOf('function');return fn!;}
 describe('website Match test/sample recipient boundary',()=>{
+ it('shows Europa and all three exact-ID favorites without downloading or seeding Team records',async()=>{
+  const tree=await Dashboard({searchParams:Promise.resolve({})});
+  const text=JSON.stringify(tree);for(const label of ['UEFA Europa League','National teams and Inter Miami','Argentina','Brazil','Inter Miami'])expect(text).toContain(label);
+  expect(mocks.render).not.toHaveBeenCalled();expect(mocks.sendMessage).not.toHaveBeenCalled();
+ });
  it('never sends to a legacy chat without approval, even through a submitted old form',async()=>{
   const test=await action('Send a test message'),sample=await action('Send a sample post');mocks.approved.mockResolvedValue(null);
   await expect(test(new FormData())).rejects.toMatchObject({destination:'/dashboard/match?test=nochat'});await expect(sample(new FormData())).rejects.toMatchObject({destination:'/dashboard/match?sample=nochat'});
