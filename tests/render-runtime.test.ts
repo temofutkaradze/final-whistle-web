@@ -24,6 +24,7 @@ describe('extracted renderer lifecycle', () => {
     expect(launch).toHaveBeenCalledTimes(1);
     expect(browser.newContext).toHaveBeenCalledExactlyOnceWith({
       viewport: { width: 1080, height: 1350 }, deviceScaleFactor: 2,
+      acceptDownloads:false,serviceWorkers:'block',
     });
     await runtime.resetBrowser();
     await runtime.resetBrowser();

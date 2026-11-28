@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "prebuild": "node scripts/production-build-guard.mjs begin",
     "build": "next build",
     "postbuild": "node scripts/production-build-guard.mjs finish",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "bot": "node --env-file=.env scripts/bot.mjs",
@@ -41,5 +41,10 @@
     "typescript": "^7.0.2",
     "vite": "^6.4.0",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "@prisma/config": {
+      "effect": "3.22.1"
+    }
   }
 }

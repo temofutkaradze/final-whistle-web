@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runPoller, shouldRestart } from "../scripts/lib/poller.mjs";
+// @ts-expect-error Runtime-only scheduler.
+import {createJobScheduler} from '../scripts/lib/job-scheduler.mjs';
 
 // The loop that listens to one customer's Telegram bot, run against a scripted fake Telegram.
 
@@ -186,7 +188,40 @@ describe("runPoller: messages", () => {
 });
 
 describe('runPoller: Stage 1 safety',()=>{
+ it('does not acknowledge a queued update before work and durable checkpoint finish',async()=>{
+  const update={update_id:10,message:{text:'queued'}},stored:number[]=[],calls:string[]=[],offsets:number[]=[];let schedules=0;
+  let releasePoll!:()=>void,scheduled!:()=>Promise<void>,readyResolve!:()=>void;
+  const ready=new Promise<void>(r=>readyResolve=r);let polling=0;
+  const entry:any={stop:false,failed:false,offset:10,label:'mock',ctx:{},tg:{api:vi.fn(async(method:string,body:any)=>{
+    calls.push(method);if(method==='getMe')return ME;if(method==='getWebhookInfo')return ok({url:''});if(method==='setMyCommands')return ok();
+    offsets.push(body.offset);if(++polling===1)return ok([update,update]);return new Promise(resolve=>{releasePoll=()=>{entry.stop=true;resolve(ok([]));};});
+  })},checkpoint:async(next:number)=>{stored.push(next);entry.offset=next;},schedule:(_update:any,work:()=>Promise<void>)=>{schedules++;return new Promise<void>((resolve,reject)=>{scheduled=()=>work().then(resolve,reject);readyResolve();});}};
+  const running=runPoller(entry,{handle:vi.fn(),onUpdateError:vi.fn(),sleep:async()=>{},log:()=>{},error:()=>{}});
+  await ready;await new Promise(r=>setImmediate(r));expect(offsets).toEqual([10,10]);expect(stored).toEqual([]);
+  await scheduled();expect(stored).toEqual([11]);expect(schedules).toBe(1);
+  await new Promise(r=>setImmediate(r));expect(calls.filter(c=>c==='getUpdates')).toHaveLength(2);
+  releasePoll();await running;expect(entry.offset).toBe(11);
+ });
+ it('leaves an interrupted queued update unacknowledged and replayable',async()=>{
+  const update={update_id:10,message:{text:'queued'}};let releaseWork!:()=>Promise<void>,readyResolve!:()=>void;const ready=new Promise<void>(r=>readyResolve=r),stored:number[]=[];let updates=0;
+  const entry:any={stop:false,failed:false,offset:10,label:'mock',ctx:{},tg:{api:vi.fn(async(method:string)=>{if(method==='getMe')return ME;if(method==='getWebhookInfo')return ok({url:''});if(method==='setMyCommands')return ok();if(method==='getUpdates'){updates++;return ok(updates===1?[update]:[]);}throw Error(method);})},checkpoint:async(next:number)=>{stored.push(next);entry.offset=next;},schedule:(_update:any,work:()=>Promise<void>)=>new Promise<void>((resolve,reject)=>{releaseWork=()=>work().then(resolve,reject);readyResolve();})};
+  const running=runPoller(entry,{handle:vi.fn(),onUpdateError:vi.fn(),sleep:async()=>{},log:()=>{},error:()=>{}});await ready;entry.stop=true;await releaseWork();await running;
+  expect(updates).toBe(1);expect(stored).toEqual([]);expect(entry.offset).toBe(10);
+ });
  it('never deletes an existing webhook or begins polling it',async()=>{const s=setup({getWebhookInfo:[ok({url:'https://example.com/hook'})]});await s.run();expect(s.entry.blocked).toBe(true);expect(s.calls.map(c=>c.method)).toEqual(['getMe','getWebhookInfo']);});
- it('checks cursor persistence before handling and skips duplicate updates',async()=>{const handle=vi.fn(async()=>{});const u={update_id:10,message:{text:'hi'}};const s=setup({getUpdates:[ok([u,u])]}, {stopAfterGetUpdates:1,handle});s.entry.checkpoint=vi.fn(async()=>expect(handle).not.toHaveBeenCalled());await s.run();expect(handle).toHaveBeenCalledTimes(1);expect(s.entry.checkpoint).toHaveBeenCalledExactlyOnceWith(11);expect(s.entry.offset).toBe(11);});
+ it('handles an update before checkpointing it and skips duplicates',async()=>{const handle=vi.fn(async()=>{});const u={update_id:10,message:{text:'hi'}};const s=setup({getUpdates:[ok([u,u])]}, {stopAfterGetUpdates:1,handle});s.entry.checkpoint=vi.fn(async()=>expect(handle).toHaveBeenCalledTimes(1));await s.run();expect(handle).toHaveBeenCalledTimes(1);expect(s.entry.checkpoint).toHaveBeenCalledExactlyOnceWith(11);expect(s.entry.offset).toBe(11);});
  it('does not handle a batch returned after manager lock loss',async()=>{const s=setup({getUpdates:[ok([{update_id:10}])]}, {stopAfterGetUpdates:1});let active=true;s.entry.isActive=()=>active;const original=s.tg.api;s.tg.api=vi.fn(async(...args:any[])=>{const reply=await (original as any)(...args);if(args[0]==='getUpdates')active=false;return reply;});await s.run();expect(s.deps.handle).not.toHaveBeenCalled();});
 });
+ it('admits a newly arriving owner command while a delegated render is unfinished without acknowledging either early',async()=>{
+  const jobs=createJobScheduler(),persisted:number[]=[],handled:number[]=[],offsets:number[]=[];
+  let finishDelegate!:()=>void,ownerStarted!:()=>void,finishPoll!:()=>void;
+  const delegateGate=new Promise<void>(r=>finishDelegate=r),ownerReady=new Promise<void>(r=>ownerStarted=r);
+  const delegate={update_id:10,owner:false},owner={update_id:11,owner:true};let polls=0;
+  const entry:any={stop:false,offset:10,label:'mock',ctx:{},checkpoint:async(n:number)=>{persisted.push(n);},
+   schedule:(u:any,work:()=>Promise<void>)=>jobs.enqueue(u.owner?'owner':'delegate',u.owner,work),
+   tg:{api:async(method:string,body:any)=>{if(method==='getMe')return ME;if(method==='getWebhookInfo')return ok({url:''});if(method==='setMyCommands')return ok();offsets.push(body.offset);polls++;if(polls===1)return ok([delegate]);if(polls===2)return ok([delegate,owner]);return new Promise(r=>{finishPoll=()=>r(ok([]));});}}};
+  const running=runPoller(entry,{handle:async(_ctx:any,u:any)=>{handled.push(u.update_id);if(!u.owner)await delegateGate;else ownerStarted();},sleep:async()=>{await new Promise(r=>setImmediate(r));},log:()=>{},error:()=>{}});
+  await ownerReady;expect(handled).toEqual([10,11]);expect(persisted).toEqual([]);expect(offsets).toEqual([10,10]);
+  await new Promise(r=>setImmediate(r));entry.stop=true;finishDelegate();finishPoll?.();await running;await jobs.close();
+  expect(persisted).toEqual([11,12]);expect(handled).toEqual([10,11]);expect(offsets.every(n=>n===10)).toBe(true);
+ });

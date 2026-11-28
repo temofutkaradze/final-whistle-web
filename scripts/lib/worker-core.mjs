@@ -1,10 +1,9 @@
 import { classifyError, createBackoff } from './worker/retry.mjs';
 export { classifyError, createBackoff } from './worker/retry.mjs';
 import {approvedMatchUser} from './match-pairing.mjs';
-import {deleteUnusedBackground} from './background-files.mjs';
-import {realpath,lstat} from 'node:fs/promises';
 import {isLiveCheckpoint} from './live-checkpoint.mjs';
 import {createIdleCache} from './idle-cache.mjs';
+import {archiveOldMatchSelections,matchReceiptStorageReady,deleteUnselectedOldMatches} from './match-receipts.mjs';
 // The brain of the worker (scripts/worker.mjs): finds finished matches, builds the post for every customer who picked the
 // match and sends it to their approved Telegram chat. Its external dependencies (database,
 // match data, render server, Telegram, the clock) is handed in, so tests can replace all of it.
@@ -12,7 +11,7 @@ import {createIdleCache} from './idle-cache.mjs';
 // Rules (same as the n8n workflow it replaced):
 //   - wait 107 min after kickoff, give up after 24 h
 //   - status check = 1 request per day list; events = 1 request per finished match; the result is shared by all customers
-//   - old matches are deleted from our database after 48 h
+//   - unselected shared Match rows are deleted after 48 h; Selection receipts stay until a receipt archive is approved
 //
 // What this version adds on top, and why (each point has a test in tests/worker-core.test.ts):
 //   1. A failing status check or events download no longer stops the whole round: posts that are ready are still sent.
@@ -38,6 +37,9 @@ export function createWorkerCore(deps) {
     pickBackground, // (sel, brand) => { background_path } | { background_data_uri }
     telegramForUser, // (user) => { sendMessage, sendDocument }
     unlink,
+    cleanupMatchArtifacts = async () => {},
+    cleanupMatchHtml = async () => {},
+    storageMaintenance,
     localDate,
     config, // CHECK_INTERVAL_MIN, CLEANUP_AFTER_HOURS, DELAY_MINUTES, MAX_AGE_HOURS, MAX_ATTEMPTS, RETRY_DELAY_MIN
     now = () => Date.now(),
@@ -48,6 +50,7 @@ export function createWorkerCore(deps) {
   } = deps;
   const assertActive=()=>{if(!isActive())throw Object.assign(new Error("MATCH_WORKER_LOCK_LOST"),{code:"MATCH_WORKER_LOCK_LOST"});};
   const activeClaims=new Set();
+  let cleanupAfterFixtureId=null;
   const { isFinished, isDead } = football;
   const EMPTY_EVENTS_TRIES = deps.emptyEventsTries ?? 3;
 
@@ -63,7 +66,7 @@ export function createWorkerCore(deps) {
   async function notify(user, text) {
     assertActive();
     try {
-      const approved=await approvedMatchUser(prisma,user.id,{botId:user.botId,connectionToken:user.botToken,identity:{chatId:user.telegramChatId,telegramUserId:user.telegramChatId}});
+      const approved=await approvedMatchUser(prisma,user.id,{botId:user.botId,connectionToken:user.botToken,memberVersion:user.accessVersion,identity:{chatId:user.telegramChatId,telegramUserId:user.telegramChatId}});
       if(approved)await telegramForUser(approved).sendMessage(approved.telegramChatId, text);
     } catch (e) {
       error("notify failed:", e.message);
@@ -81,7 +84,7 @@ export function createWorkerCore(deps) {
 
   async function sendOne(sel, match, eventsHtml, stage = 'final') {
     assertActive();
-    const scope={botId:sel.user.botId,connectionToken:sel.user.botToken,identity:{chatId:sel.user.telegramChatId,telegramUserId:sel.user.telegramChatId}};
+    const scope={botId:sel.user.botId,connectionToken:sel.user.botToken,memberVersion:sel.user.accessVersion,identity:{chatId:sel.user.telegramChatId,telegramUserId:sel.user.telegramChatId}};
     if(!await approvedMatchUser(prisma,sel.user.id,scope))throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
     const brand = sel.user.brands[0];
     const jpg = await renderPost({
@@ -98,7 +101,10 @@ export function createWorkerCore(deps) {
       home_score: match.homeScore,
       away_score: match.awayScore,
       ...eventsHtml,
-    });
+    },{userId:sel.user.id,owner:sel.user.accessVersion===undefined});
+    // The unique HTML source is no longer needed after Chromium returns the image.
+    // The file helper remains dry-run until the owner approves activation.
+    await cleanupMatchHtml(jpg).catch(() => {});
     assertActive();
     const approved=await approvedMatchUser(prisma,sel.user.id,scope);
     if(!approved)throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
@@ -113,8 +119,14 @@ export function createWorkerCore(deps) {
     if (!fenced.count) throw Object.assign(new Error('Delivery claim lost'), {code:'DELIVERY_CLAIM_LOST'});
     assertActive();
     const label = live ? `90+ Live Checkpoint (${match.elapsed}${match.extra ? '+'+match.extra : ''} min)` : 'Full Time';
+    if(!await approvedMatchUser(prisma,sel.user.id,scope))throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED'});
     try {
-      await telegram.sendDocument(approved.telegramChatId, jpg, `${label} — ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+      await telegram.sendDocument(approved.telegramChatId, jpg, `${label} — ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`,undefined,{beforeDispatch:async()=>{
+        assertActive();if(!await approvedMatchUser(prisma,sel.user.id,scope))throw Object.assign(new Error('Match pairing required'),{code:'MATCH_PAIRING_REQUIRED',deliveryNotAttempted:true});
+      }});
+      // Telegram confirmed acceptance. The path is unique to this render; cleanup errors
+      // must never turn a delivered post into a retry or alter its delivery fence.
+      await cleanupMatchArtifacts(jpg).catch(() => {});
     } catch (e) {
       // Only an explicit Telegram rejection proves the document was not accepted.
       if (e.deliveryNotAttempted || Number.isInteger(e.telegramCode) || /^Telegram sendDocument failed: (?:Forbidden|Bad Request|Too Many Requests)/i.test(e.message)) {
@@ -162,7 +174,6 @@ export function createWorkerCore(deps) {
     const candidates = await prisma.selection.findMany({
       where: {
         status: "SELECTED",
-        user: { botToken: { not: null } },
         match: { kickoff: { gte: new Date(t - hours(config.MAX_AGE_HOURS)), lte: new Date(t - minutes(config.DELAY_MINUTES)) } },
       },
       include: { match: true, user: { include: { brands: { orderBy: { createdAt: "desc" }, take: 1 } } } },
@@ -175,6 +186,8 @@ export function createWorkerCore(deps) {
       if(approved)sels.push({...sel,user:{...sel.user,...approved}});
     }
     if (!sels.length) return;
+    // Stable priority changes only contention between users, never match eligibility/timing.
+    sels.sort((a,b)=>Number(a.user.accessVersion!==undefined)-Number(b.user.accessVersion!==undefined));
 
     // 1) Status check, once per day list, only if some match is due for a look.
     const due = new Map();
@@ -278,6 +291,7 @@ export function createWorkerCore(deps) {
           continue;
         }
         if(e?.code==='MATCH_PAIRING_REQUIRED'){
+          if(sel.user.accessVersion!==undefined)continue;
           await prisma.selection.update({where:{id:sel.id},data:{status:'SELECTED'}});continue;
         }
         const label = `${match.homeTeam} - ${match.awayTeam} -> ${sel.user.email}`;
@@ -366,15 +380,15 @@ export function createWorkerCore(deps) {
       where: {
         status: "SELECTED",
         match: { kickoff: { lt: new Date(t - hours(config.MAX_AGE_HOURS)) } },
-        user: { botToken: { not: null } },
       },
       include: { match: true, user: true },
     });
     for (const sel of old) {
       assertActive();
-      if(!await approvedMatchUser(prisma,sel.user.id))continue;
+      const approved=await approvedMatchUser(prisma,sel.user.id);
+      if(!approved)continue;
       await prisma.selection.update({ where: { id: sel.id }, data: { status: "FAILED", lastError: `gave up after ${config.MAX_AGE_HOURS} h without a result` } });
-      await notify(sel.user, `We could not get the final result of ${sel.match.homeTeam} - ${sel.match.awayTeam} in time, so there is no post.`);
+      await notify(approved, `We could not get the final result of ${sel.match.homeTeam} - ${sel.match.awayTeam} in time, so there is no post.`);
     }
     if (old.length) log(`[expired] ${old.length} posts closed after ${config.MAX_AGE_HOURS} h`);
   }
@@ -396,32 +410,41 @@ export function createWorkerCore(deps) {
   async function cleanup() {
     assertActive();
     const t = now();
-    const old = await prisma.match.findMany({
-      where: { kickoff: { lt: new Date(t - hours(config.CLEANUP_AFTER_HOURS)) } },
-      select: { fixtureId: true },
+    const candidates=()=>prisma.match.findMany({
+      where: { kickoff: { lt: new Date(t - hours(config.CLEANUP_AFTER_HOURS)) },...(cleanupAfterFixtureId===null?{}:{fixtureId:{gt:cleanupAfterFixtureId}}) },
+      select: { fixtureId: true },orderBy:{fixtureId:'asc'},take:50,
     });
+    let old=await candidates();
+    if(!old.length&&cleanupAfterFixtureId!==null){cleanupAfterFixtureId=null;old=await candidates();}
+    // Advance past retained/unresolved rows too; otherwise the same first 50 rows
+    // could indefinitely starve safe cleanup of every later fixture. Restart wraps safely.
+    cleanupAfterFixtureId=old.length?old[old.length-1].fixtureId:null;
     if (old.length) {
       const ids = old.map((m) => m.fixtureId);
-      const sels = await prisma.selection.findMany({ where: { fixtureId: { in: ids } }, select: { backgroundPath: true, fixtureId: true, userId: true, status: true } });
-      const held=new Set();
-      const approvals=new Map();
-      for(const s of sels)if(['SELECTED','SENDING'].includes(s.status)){
-        if(!approvals.has(s.userId))approvals.set(s.userId,await approvedMatchUser(prisma,s.userId));
-        if(!approvals.get(s.userId))held.add(s.fixtureId);
+      const retainedSelections = await prisma.selection.findMany({ where: { fixtureId: { in: ids } }, select: { fixtureId: true } });
+      const hasReceipt = new Set(retainedSelections.map(s => s.fixtureId));
+      const removable = ids.filter(id => !hasReceipt.has(id));
+      const removed=await deleteUnselectedOldMatches(prisma,removable,new Date(t-hours(config.CLEANUP_AFTER_HOURS)));
+      let archived = 0, cleanedSelections = 0, held = ids.length - removed;
+      let receiptReady = false;
+      if (held) {
+        try { receiptReady = await matchReceiptStorageReady(prisma); }
+        catch (e) { error('[cleanup] receipt storage unavailable; matched records retained:', e.message); }
       }
-      const removable=ids.filter(id=>!held.has(id));
-      await prisma.match.deleteMany({ where: { fixtureId: { in: removable } } }); // selections go with them
-      const paths = new Set(sels.filter(s => !held.has(s.fixtureId) && s.backgroundPath).map(s => s.backgroundPath));
-      for (const file of paths) {
+      if (receiptReady) for (const fixtureId of [...hasReceipt]) {
         assertActive();
-        try { await deleteUnusedBackground(prisma,file,{realpath,lstat,...deps.backgroundFs,unlink}); }
-        catch (e) { error("[cleanup] background retained:", e.message); }
+        try {
+          const result = await archiveOldMatchSelections(prisma, fixtureId, new Date(t - hours(config.CLEANUP_AFTER_HOURS)), t);
+          archived += result.archived;
+          cleanedSelections += result.deletedSelections;
+          if (result.deletedMatch) held--;
+        } catch (e) { error('[cleanup] receipt archive failed; fixture retained:', e.message); }
       }
-      log(`[cleanup] removed ${removable.length} old matches`);
+      log(`[cleanup] removed ${ids.length-held} matches older than ${config.CLEANUP_AFTER_HOURS} h; archived ${archived} receipts; removed ${cleanedSelections} terminal selections; retained ${held} unresolved matches`);
     }
     const cutoffDay = localDate(new Date(t - hours(72)));
     const days = await prisma.fixtureDay.findMany({
-      where: { OR: [{date:{lt:cutoffDay}}, {date:{gte:'utc:',lt:'utc:'+cutoffDay}}] }, select:{date:true},
+      where: { OR: [{date:{lt:cutoffDay}}, {date:{gte:'utc:',lt:'utc:'+cutoffDay}}] }, select:{date:true}, take:50,
     });
     const expired = days.filter(({date}) => {
       const parsed = /^(?:([0-9]{4}-[0-9]{2}-[0-9]{2})|utc:([0-9]{4}-[0-9]{2}-[0-9]{2})\|[0-9]+(?:,[0-9]+)*)$/.exec(date);
@@ -430,8 +453,20 @@ export function createWorkerCore(deps) {
       const value = new Date(day+'T00:00:00.000Z');
       return Number.isFinite(value.getTime()) && value.toISOString().slice(0,10) === day;
     }).map(({date}) => date);
-    if (expired.length) await prisma.fixtureDay.deleteMany({where:{date:{in:expired}}});
-    await prisma.apiUsage.deleteMany({ where: { day: { lt: new Date(t - hours(24 * 7)).toISOString().slice(0, 10) } } });
+    if (expired.length) await prisma.fixtureDay.deleteMany({where:{date:{in:expired.slice(0,50)}}});
+    const oldUsage = await prisma.apiUsage.findMany({where:{day:{lt:new Date(t-hours(24*7)).toISOString().slice(0,10)}},select:{day:true},take:50});
+    if (oldUsage.length) await prisma.apiUsage.deleteMany({where:{day:{in:oldUsage.map(row=>row.day)}}});
+
+    if (storageMaintenance) {
+      try {
+        const report = await storageMaintenance.runStorageMaintenance({ prisma, now: t, includeNewsTemp: false, rendererExclusive: false, log });
+        const capacity = await storageMaintenance.measureStorageCapacity({ prisma, warn: message => log(message) });
+        if (report.mode === 'dry-run' && (report.files.length || report.database.expiredSessions.length || report.database.expiredPairingChallenges.length || report.database.expiredInactiveNewsConversations.length || report.database.expiredMatchDeliveryReceipts.length)) {
+          log(`[maintenance dry-run] candidates: files=${report.files.length}, sessions=${report.database.expiredSessions.length}, challenges=${report.database.expiredPairingChallenges.length}, newsStates=${report.database.expiredInactiveNewsConversations.length}, matchReceipts=${report.database.expiredMatchDeliveryReceipts.length}`);
+        }
+        void capacity;
+      } catch (e) { error('[maintenance] report unavailable; no cleanup was applied:', e.message); }
+    }
     const pending=await prisma.selection.findMany({where:{status:{in:['SELECTED','SENDING']}},select:{id:true,fixtureId:true}});
     const liveIds=new Set(pending.map(s=>s.fixtureId));
     const tracked=await prisma.match.findMany({where:{fixtureId:{in:[...liveIds]}},select:{day:true}});

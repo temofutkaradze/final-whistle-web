@@ -1,3 +1,5 @@
+import logging from './security-log.cjs';
+import {admitUpload} from './resource-budget.mjs';
 import {documentForm} from "./document-form.mjs";
 import {createIdleCache} from './idle-cache.mjs';
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -25,6 +27,7 @@ export function matchImageUpload(message) {
 
 // Everything the scripts need from Telegram, for ONE bot token.
 export function makeTelegram(token) {
+  logging.registerSecret(token);
   // Every request has a time limit: without one, a network that drops silently leaves a bot waiting forever.
   // (Long polling asks Telegram to answer within 25 s, so getUpdates is given 40 s.)
   async function api(method, body = {}, { timeoutMs = 30_000 } = {}) {
@@ -40,11 +43,12 @@ export function makeTelegram(token) {
   const sendMessage = (chatId, text, extra = {}) => api("sendMessage", { chat_id: chatId, text, ...extra });
 
   // Sent as a document so Telegram does not compress the picture.
-  async function sendDocument(chatId, filePath, caption, fileName = path.basename(filePath)) {
+  async function sendDocument(chatId, filePath, caption, fileName = path.basename(filePath), {beforeDispatch} = {}) {
     let bytes;
     try { bytes = await readFile(filePath); }
     catch (e) { e.deliveryNotAttempted = true; throw e; }
     const form=documentForm(chatId,bytes,caption,fileName);
+    await beforeDispatch?.();
     const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(90_000) });
     const data = await res.json();
     if (!data.ok) throw Object.assign(new Error(data.description ?? "Telegram sendDocument failed"), { telegramCode: data.error_code });
@@ -65,8 +69,10 @@ export function makeTelegram(token) {
     const buf = await readTelegramImage(res);
 
     await mkdir(destDir, { recursive: true });
+    if(path.resolve(destDir).toLowerCase()===path.resolve('storage/backgrounds').toLowerCase())await admitUpload(destDir,baseName,buf.length);
+    if(!/^[A-Za-z0-9_-]{1,180}$/.test(baseName))throw Error("Invalid upload filename");
     const full = path.join(destDir, baseName + ext);
-    await writeFile(full, buf);
+    await writeFile(full, buf,{flag:"wx",mode:0o600});
     return full;
   }
 

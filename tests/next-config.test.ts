@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {contentSecurityPolicy} from '@/lib/security-policy';
 
 // next.config.mjs sets the security headers of the site. The policy depends on NODE_ENV, so each case loads the file again.
 afterEach(() => vi.unstubAllEnvs());
@@ -32,7 +33,8 @@ describe("security headers", () => {
 
   it("production: a strict Content-Security-Policy and HSTS", async () => {
     const { headers } = await load("production");
-    const csp = headers["Content-Security-Policy"];
+    expect(headers["Content-Security-Policy"]).toBeUndefined(); // supplied per request by Proxy
+    const csp = contentSecurityPolicy('testnonce0123456789012345');
     expect(csp).toBeDefined();
     const directives = Object.fromEntries(csp.split(";").map((d) => d.trim().split(/\s+/)).map(([name, ...values]) => [name, values]));
     expect(directives["default-src"]).toEqual(["'self'"]);

@@ -1,16 +1,21 @@
+import './lib/runtime-security-bootstrap.mjs';
+import {createJobScheduler,createReplyBudget} from './lib/job-scheduler.mjs';
+import logging from './lib/security-log.cjs';
+logging.install();
 // Telegram bots.
 // Run with:  npm run bot      (keep this window open)
 // Long polling: no public URL / ngrok needed.
 //
 // Every customer has their OWN bot (token saved on the dashboard, stored encrypted). There is no shared bot.
-// That bot belongs to one customer: private Telegram pairing requires explicit website approval.
+// Owner pairing remains explicit; approved delegates use isolated principals on the same bot.
 // Legacy chat IDs alone never authorize access. New / removed customer bots are picked up automatically every 10 seconds.
 //
 // Commands:  /matches  today's matches     type a team name -> search     send an image -> background
 // IMPORTANT: a bot that has a webhook (like the one n8n uses) cannot be polled; use new bots.
 
-import {approvedMatchUser,createMatchAccessHandler} from "./lib/match-pairing.mjs";
-import { prisma } from "./lib/db.mjs";
+import {approvedMatchUser,createMatchAccessHandler,privateMatchIdentity} from "./lib/match-pairing.mjs";
+import { prisma as database } from "./lib/db.mjs";
+const prisma=database;
 import {acquireProcessLock,processLockClient,PROCESS_LOCKS} from "./lib/process-lock.mjs";
 import {updateCursor} from "./lib/update-cursor.mjs";
 let stopping=false,managerLock;
@@ -20,15 +25,17 @@ import { makeTelegram, matchImageUpload } from "./lib/telegram.mjs";
 import { decryptSecret } from "./lib/crypto.mjs";
 import { BACKGROUND_DIR, renderPost, brandLookFields } from "./lib/render.mjs";
 import {regenerateAssignedMatches} from './lib/manual-match-post.mjs';
+import {cleanupDeliveredMatchArtifacts,cleanupMatchHtmlAfterRender} from './lib/storage-maintenance.mjs';
 import { ensureDay, formatKickoff, localDayRange } from "./lib/football.mjs";
 import { listAvailableMatches, filterMatchList, matchVisibilityWhere } from "./lib/match-list.mjs";
 import { MAX_AGE_HOURS } from "./lib/config.mjs";
 import { runPoller, shouldRestart } from "./lib/poller.mjs";
-import { toggleSelection } from "./lib/selection.mjs";
+import { setSelectionState } from "./lib/selection.mjs";
 import {withBackgroundFile,assignPendingBackground} from "./lib/background-files.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_BUTTONS = 50;
+const jobs=createJobScheduler(),busyReplies=createReplyBudget();
 
 const HELP =
   "How it works:\n" +
@@ -47,10 +54,11 @@ const matchButton = (m, selected) => [
 // ctx = { tg, ownerId }   ownerId = the customer who owns this bot.
 
 async function findUser(ctx, chatId) {
-  return approvedMatchUser(prisma,ctx.ownerId,{botId:ctx.botId,connectionToken:ctx.connectionToken,identity:{chatId,telegramUserId:chatId}});
+  const prisma=ctx.database??database;
+  return approvedMatchUser(prisma,ctx.actorId??ctx.ownerId,{botId:ctx.botId,connectionToken:ctx.connectionToken,memberVersion:ctx.memberVersion,identity:{chatId,telegramUserId:chatId}});
 }
 
-async function selectedIds(userId, fixtureIds) {
+async function selectedIds(userId, fixtureIds, prisma=database) {
   const rows = await prisma.selection.findMany({ where: { userId, fixtureId: { in: fixtureIds },status:{not:'DESELECTED'} }, select: { fixtureId: true } });
   return new Set(rows.map((r) => r.fixtureId));
 }
@@ -60,13 +68,14 @@ async function todaysMatches() {
 }
 
 // What the customer follows: leagues and/or clubs. Nothing chosen = show every league we store.
-async function userFilters(userId) {
+async function userFilters(userId, prisma=database) {
   const subs = await prisma.subscription.findMany({ where: { userId, status: "ACTIVE" }, select: { leagueIds: true } });
   const favs = await prisma.favoriteTeam.findMany({ where: { userId }, select: { teamId: true } });
   return { leagues: new Set(subs.flatMap((s) => s.leagueIds)), teams: new Set(favs.map((f) => f.teamId)) };
 }
 
 async function sendMatchList(ctx, chatId, user, search) {
+  const prisma=ctx.database??database;
   const { tg } = ctx;
   let matches;
   try {
@@ -76,7 +85,7 @@ async function sendMatchList(ctx, chatId, user, search) {
     await tg.sendMessage(chatId, "Could not load today's matches right now. Please try again in a few minutes.");
     return;
   }
-  const { leagues, teams } = await userFilters(user.id);
+  const { leagues, teams } = await userFilters(user.id,prisma);
   matches = filterMatchList(matches, { leagues, teams }, search, MAX_BUTTONS);
 
   if (!matches.length) {
@@ -87,7 +96,7 @@ async function sendMatchList(ctx, chatId, user, search) {
     return;
   }
   if(!await findUser(ctx,chatId))return;
-  const chosen = await selectedIds(user.id, matches.map((m) => m.fixtureId));
+  const chosen = await selectedIds(user.id, matches.map((m) => m.fixtureId),prisma);
   await tg.sendMessage(chatId, search ? "Found:" : "Pick the matches you want a post for (tap again to remove).", {
     reply_markup: { inline_keyboard: matches.map((m) => matchButton(m, chosen.has(m.fixtureId))) },
   });
@@ -99,6 +108,7 @@ async function handleStart(ctx, chatId) {
 
 // A background image arrived (photo or image file).
 async function handleUpload(ctx, msg, chatId) {
+  const prisma=ctx.database??database;
   const { tg } = ctx;
   const user = await findUser(ctx, chatId);
   if (!user) return handleStart(ctx, chatId);
@@ -125,7 +135,7 @@ async function handleUpload(ctx, msg, chatId) {
   try {
     file = await tg.downloadTelegramFile(upload.fileId, BACKGROUND_DIR, `${user.id}_${Date.now()}`, {imageExtension:upload.extension});
   } catch (e) {
-    await tg.sendMessage(chatId, `Could not use that image: ${e.message}`);
+    await tg.sendMessage(chatId, `Could not use that image: ${logging.redact(e.message)}`);
     return;
   }
 
@@ -137,6 +147,7 @@ async function handleUpload(ctx, msg, chatId) {
 }
 
 async function handleCallback(ctx, cb) {
+  const prisma=ctx.database??database;
   const { tg } = ctx;
   const chatId = String(cb.message?.chat?.id ?? "");
   const user = await findUser(ctx, chatId);
@@ -147,7 +158,9 @@ async function handleCallback(ctx, cb) {
 
   if (kind === "select") {
     const fixtureId = Number(arg);
-    const { result } = await toggleSelection({ prisma, userId: user.id, fixtureId, maxAgeHours: MAX_AGE_HOURS });
+    const originalButton=cb.message?.reply_markup?.inline_keyboard?.flat()?.find(b=>b.callback_data===cb.data);
+    if(!originalButton)return answer("This match button is out of date. Send /matches to refresh the list.");
+    const { result } = await setSelectionState({ prisma, userId: user.id, fixtureId, selected:!/^✅/.test(String(originalButton.text??'')), maxAgeHours: MAX_AGE_HOURS });
     if (result === "no-match") return answer("This match is no longer available.");
     if (result === "already-sent") return answer("Already sent to you.");
     if (result === "sending") return answer("This post is being sent right now.");
@@ -186,7 +199,9 @@ async function handleCallback(ctx, cb) {
     });
     if(res.count){
       const result=await regenerateAssignedMatches({prisma,userId:user.id,backgroundPath:path,fixtureId:arg==='all'?'all':Number(arg),
-        scope:{botId:ctx.botId,connectionToken:ctx.connectionToken,identity:{chatId,telegramUserId:chatId}},tg,renderPost,brandLookFields,
+        scope:{botId:ctx.botId,connectionToken:ctx.connectionToken,memberVersion:ctx.memberVersion,identity:{chatId,telegramUserId:chatId}},tg,renderPost,brandLookFields,
+        cleanupMatchArtifacts:cleanupDeliveredMatchArtifacts,
+        cleanupMatchHtml:cleanupMatchHtmlAfterRender,
         isActive:()=>!stopping&&Boolean(managerLock?.active())});
       if(result.unavailable)await tg.sendMessage(chatId,'Background saved. A result image cannot be generated until the selected match has a recorded score.');
       if(result.failed)await tg.sendMessage(chatId,'Background saved, but the new image could not be delivered. Upload another photo to try again.');
@@ -252,6 +267,8 @@ async function syncBots() {
     if(stopping || !managerLock?.active()) return;
     const cursor=await updateCursor(info.ownerId,info.botId);
     const entry = { stop: false, failed: false, tg, label: info.label, ctx: { tg, ownerId: info.ownerId, botId:info.botId, connectionToken:info.connectionToken }, lastFailure: existing?.lastFailure ?? null, ...cursor, isActive:()=>!stopping&&Boolean(managerLock?.active()) };
+    entry.schedule=(update,work)=>{const msg=update.callback_query?{chat:update.callback_query.message?.chat,from:update.callback_query.from}:update.message;const identity=privateMatchIdentity(msg);if(!identity)return Promise.resolve();const queued=jobs.enqueue(info.ownerId+':'+identity.telegramUserId,entry.ownerTelegramId===identity.telegramUserId,async()=>{if(entry.isActive()&&!entry.stop)await work();});if(!queued){if(busyReplies(info.ownerId+':'+identity.chatId))tg.sendMessage(identity.chatId,'Your request queue is full. Please wait for existing work, then send this request again.').catch(()=>{});return null;}return queued;};
+    entry.ownerTelegramId=(await prisma.matchTelegramBinding.findUnique({where:{userId:info.ownerId}}))?.telegramUserId;
     running.set(token, entry);
     entry.task=pollLoop(entry).catch((e) => {
       console.error(`[${info.label}] polling crashed:`, e);
@@ -281,4 +298,4 @@ async function main() {
   }
 }
 
-main().catch(()=>{console.error("[Match] MATCH_MANAGER_STOPPED; check the database and local cursor storage.");process.exitCode=1;}).finally(async()=>{stop();await Promise.allSettled([...running.values()].map(entry=>entry.task));await managerLock?.release();await prisma.$disconnect();});
+main().catch(()=>{console.error("[Match] MATCH_MANAGER_STOPPED; check the database and local cursor storage.");process.exitCode=1;}).finally(async()=>{stop();await Promise.allSettled([...running.values()].map(entry=>entry.task));await jobs.close();await managerLock?.release();await prisma.$disconnect();});

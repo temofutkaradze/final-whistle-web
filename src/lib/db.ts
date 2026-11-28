@@ -1,3 +1,4 @@
+import {verifiedDatabaseUrl} from '../../scripts/lib/database-tls.mjs';
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -15,7 +16,7 @@ function createPrismaClient() {
   }
 
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
+    adapter: new PrismaPg({ connectionString:verifiedDatabaseUrl(connectionString) }),
   });
 }
 

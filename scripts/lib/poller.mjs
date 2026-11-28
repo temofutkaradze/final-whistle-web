@@ -1,3 +1,4 @@
+import {createOrderedUpdateCursor} from './ordered-update-cursor.mjs';
 // The long-polling loop of ONE customer bot (used by scripts/bot.mjs). Everything it talks to is handed in, so tests can
 // replace Telegram and the clock.
 //
@@ -53,12 +54,17 @@ export async function runPoller(entry, { handle, onUpdateError, sleep, now = () 
 
   // ---- the loop ----
   let offset = entry.offset ?? 0;
+  const updateCursor=createOrderedUpdateCursor(offset,async next=>{await entry.checkpoint?.(next);entry.offset=next;});
   let pause = 2000;
   let offline = false;
+  const inFlight=new Set();
+  try {
   while (!entry.stop && (entry.isActive?.() ?? true)) {
     let res;
     try {
-      res = await tg.api("getUpdates", { timeout: 25, offset, allowed_updates: ["message", "callback_query"] }, { timeoutMs: 40_000 });
+      try{await updateCursor.retry();}catch(e){error(`[${label}] update checkpoint failed; pending work remains recoverable:`,e);await sleep(1000);continue;}
+      offset=updateCursor.fetchOffset;
+      res = await tg.api("getUpdates", { timeout: 25, offset:updateCursor.checkpointOffset, allowed_updates: ["message", "callback_query"] }, { timeoutMs: 40_000 });
     } catch (e) {
       if (entry.stop) break;
       if (!offline) error(`[${label}] connection problem: ${e.message}. Trying again...`);
@@ -83,9 +89,36 @@ export async function runPoller(entry, { handle, onUpdateError, sleep, now = () 
     for (const update of res.result ?? []) {
       if (entry.stop || !(entry.isActive?.() ?? true)) break;
       if (!Number.isSafeInteger(update.update_id) || update.update_id < offset) continue;
-      offset = update.update_id + 1;
-      await entry.checkpoint?.(offset);
-      entry.offset = offset;
+      if(entry.schedule){
+        let ticketComplete,releaseTicket,processed=false;
+        const ticketReady=new Promise(resolve=>{releaseTicket=resolve;});
+        const work=entry.schedule(update,async()=>{
+          if(entry.stop||!(entry.isActive?.()??true))throw Object.assign(Error('Scheduled Telegram work was interrupted'),{code:'TELEGRAM_WORK_INTERRUPTED'});
+          await handle(entry.ctx,update);
+          processed=true;await ticketReady;await ticketComplete();
+        });
+        if(!work){await sleep(500);break;} // Leave Telegram's offset before this update.
+        const ticket=updateCursor.accept(update.update_id);if(!ticket)continue;
+        ticketComplete=ticket.complete;releaseTicket();
+        offset=updateCursor.fetchOffset; // In-memory only; durable checkpoint follows completion.
+        const settled=work.then(async()=>{
+          // A resolved scheduler skip (for example, a non-private update) is
+          // intentionally discarded, but a stopped manager must leave it replayable.
+          if(!processed&&!entry.stop&&(entry.isActive?.()??true))await ticket.complete();
+        },async e=>{
+          if(!processed){
+            if(e?.code==='TELEGRAM_WORK_INTERRUPTED')return;
+            error(`[${label}] scheduled update failed:`,e);
+            if(!entry.stop&&(entry.isActive?.()??true))try{await onUpdateError?.(entry.ctx,update,e);}catch{}
+            try{await ticket.complete();}catch(checkpointError){error(`[${label}] update checkpoint failed; pending work remains recoverable:`,checkpointError);}
+          }else error(`[${label}] update checkpoint failed; pending work remains recoverable:`,e);
+        }).catch(e=>error(`[${label}] scheduled update completion failed:`,e));
+        inFlight.add(settled);settled.finally(()=>inFlight.delete(settled));
+        continue;
+      }
+      const ticket=updateCursor.accept(update.update_id);
+      if(!ticket)continue;
+      offset=updateCursor.fetchOffset;
       try {
         await handle(entry.ctx, update);
       } catch (e) {
@@ -97,7 +130,14 @@ export async function runPoller(entry, { handle, onUpdateError, sleep, now = () 
           /* telling the person is best effort */
         }
       }
+      if(entry.stop||!(entry.isActive?.()??true))break;
+      await ticket.complete();
     }
+    // Re-poll the persisted offset, never the accepted offset. Telegram retains unfinished
+    // updates; fetchOffset prevents duplicate scheduling. Throttle repeated pending batches.
+    if(updateCursor.pending)await sleep(1000);
+    if(entry.stop||!(entry.isActive?.()??true))break;
   }
+  } finally { await Promise.all(inFlight); }
   log(`[${label}] bot stopped`);
 }

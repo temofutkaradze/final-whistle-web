@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import * as files from 'node:fs/promises';
+import {memberBackgroundTransaction} from './member-context.mjs';
 
 const ROOT = path.resolve('storage/backgrounds');
 const key = p => process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p);
@@ -17,6 +18,8 @@ export async function withBackgroundFile(db, file, work) {
   const resolved = confined(file);
   if (!resolved) throw new Error('Invalid background file path');
   const lock = createHash('sha256').update('final-whistle-background:' + key(resolved)).digest().readBigInt64BE();
+  const scoped=memberBackgroundTransaction(db,lock,tx=>work(tx,resolved));
+  if(scoped)return scoped;
   return db.$transaction(async tx => {
     // Same database/file lock in the bot and worker; held until commit or rollback. No schema objects are created.
     await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(${lock})`;

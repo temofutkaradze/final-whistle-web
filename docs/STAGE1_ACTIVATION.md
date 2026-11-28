@@ -23,6 +23,8 @@ This runbook supersedes the old nine-file, no-migration rollout and source-only 
 | [auth-identity.sql](../prisma/auth-identity.sql) | New public.AuthIdentity; unique provider/subject and user/provider; User FK and checks | 4FDD3E834334A174D0231C054848E34F6A1D648D3038D99714DA358B177548B4 |
 | [match-pairing.sql](../prisma/match-pairing.sql) | New public.MatchPairingChallenge and public.MatchTelegramBinding; indexes, User FKs and checks | 358406E19907E4EFBD6B87867510594EDCAFEF9FA37244AF97F62481B2148D70 |
 
+Canonical checksum note: the SHA-256 values above describe UTF-8 SQL after CRLF-to-LF normalization. Windows raw file hashes may differ. Verify canonical content using [the current technical report](./TECHNICAL_READINESS_2026-11-07.md); never waive an unexplained mismatch.
+
 Both files are transactional, additive and contain no existing-user update/backfill. Recalculate hashes before execution. Verify public.User.id, expected types/constraints and absence of conflicting tables; stop on unexpected differences. Use a temporary least-privilege migration role with required CREATE/REFERENCES rights, not broader permanent runtime permissions. Verify constraints, unchanged existing records and new empty tables after execution. Never log rows containing private account data.
 
 These are standalone SQL files, not an established Prisma migration history. Do not assume prisma migrate deploy applies them. Do not run db push, migrate dev, reset, or a generic installer. Apply only the exact separately approved files with stop-on-error behavior; each commits independently, so verify each result before proceeding. If the second fails, keep consumers stopped and inspect; do not drop the first table automatically.

@@ -1,3 +1,4 @@
+import {renderSecurityHeaders} from './resource-budget.mjs';
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import {renderHeaders} from "../../render/security.js";
@@ -59,10 +60,10 @@ export async function fileExists(p) {
 }
 
 // Demo-level safe download of a background from a URL (http(s) only, no local hosts, images only).
-export async function renderPost(payload) {
+export async function renderPost(payload,security) {
   const res = await fetch(RENDER_URL, {
     method: "POST",
-    headers: renderHeaders(),
+    headers: {...renderHeaders(),...renderSecurityHeaders(security)},
     body: JSON.stringify({...payload,output_format:'png'}),
     signal: AbortSignal.timeout(120000),
   });

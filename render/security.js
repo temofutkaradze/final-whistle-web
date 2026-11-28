@@ -71,9 +71,18 @@ exports.publicAddress=publicAddress;exports.publicUrl=publicUrl;exports.createPu
 
 // Bounded FIFO avoids dropping ordinary overlapping bot/preview requests.
 function createRenderGate(maxActive=2,maxQueued=4,waitMs=15000){
- let active=0;const queue=[];
- const grant=()=>{active++;let released=false;return ()=>{if(released)return;released=true;active--;const next=queue.shift();if(next){clearTimeout(next.timer);next.resolve(grant());}};};
- return {acquire:()=>{if(active<maxActive)return Promise.resolve(grant());if(queue.length>=maxQueued)return Promise.reject(reject('Renderer busy',429));return new Promise((resolve,rejectPromise)=>{const item={resolve,timer:null};item.timer=setTimeout(()=>{const index=queue.indexOf(item);if(index>=0)queue.splice(index,1);rejectPromise(reject('Renderer busy',429));},waitMs);item.timer.unref?.();queue.push(item);});}};
+ let active=0,delegates=0,streak=0;const queue=[];
+ const pump=()=>{while(active<maxActive){
+  const eligible=queue.filter(i=>i.owner||delegates<1);if(!eligible.length)break;
+  const next=(streak>=3?eligible.find(i=>!i.owner):null)??eligible.find(i=>i.owner)??eligible[0];
+  queue.splice(queue.indexOf(next),1);clearTimeout(next.timer);next.resolve(grant(next.owner));
+ }};
+ const grant=owner=>{active++;if(owner)streak++;else{delegates++;streak=0;}let released=false;return()=>{if(released)return;released=true;active--;if(!owner)delegates--;pump();};};
+ return {acquire:({owner=true}={})=>{
+  if(active<maxActive&&(owner||delegates<1)&&!queue.length)return Promise.resolve(grant(owner));
+  if(queue.length>=maxQueued||(!owner&&queue.filter(i=>!i.owner).length>=Math.max(1,maxQueued-1)))return Promise.reject(reject('Renderer busy',429));
+  return new Promise((resolve,rejectPromise)=>{const item={owner,resolve,timer:null};item.timer=setTimeout(()=>{const i=queue.indexOf(item);if(i>=0)queue.splice(i,1);rejectPromise(reject('Renderer busy',429));},waitMs);item.timer.unref?.();queue.push(item);pump();});
+ }};
 }
 exports.createRenderGate=createRenderGate;
 

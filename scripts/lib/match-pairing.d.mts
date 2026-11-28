@@ -1,6 +1,6 @@
 ﻿import type {Prisma,PrismaClient,User} from '@prisma/client';
 export type MatchIdentity={chatId:string;telegramUserId:string};
-export type MatchScope={botId?:string;connectionToken?:string;identity?:MatchIdentity};
+export type MatchScope={botId?:string;connectionToken?:string;identity?:MatchIdentity;memberVersion?:number};
 type Database=Pick<Prisma.TransactionClient,'user'|'matchTelegramBinding'|'matchPairingChallenge'>;
 export function privateMatchIdentity(message:unknown):MatchIdentity|null;
 export function lockMatchAccount(tx:Prisma.TransactionClient,userId:string):Promise<boolean>;

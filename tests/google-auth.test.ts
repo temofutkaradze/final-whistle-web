@@ -1,4 +1,4 @@
-﻿import {beforeEach,describe,expect,it,vi} from 'vitest';
+﻿import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import type {GoogleProfile} from '@/lib/google';
 const mocks=vi.hoisted(()=>({db:{authIdentity:{findUnique:vi.fn()},$transaction:vi.fn()}}));
 vi.mock('@/lib/db',()=>({prisma:mocks.db}));
@@ -13,7 +13,8 @@ const identityLookup=async(args:{where:{provider_subject:{provider:string;subjec
  const userId=identities.get(args.where.provider_subject.subject);
  return userId?{userId}:null;
 };
-beforeEach(()=>{
+afterEach(()=>vi.unstubAllEnvs());
+beforeEach(()=>{vi.stubEnv('FW_ALLOW_REGISTRATION','true');
  vi.resetAllMocks();users=new Map();identities=new Map();emailReads=[];sequence=0;
  mocks.db.authIdentity.findUnique.mockImplementation(identityLookup);
  // Transactional in-memory fake: staged nested writes commit together, with both

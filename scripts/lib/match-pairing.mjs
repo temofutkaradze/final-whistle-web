@@ -1,3 +1,7 @@
+import {createReplyBudget,runInJob,currentJob} from './job-scheduler.mjs';
+import {authorizationDatabase} from './member-context.mjs';
+import {createMemberDatabase,guardedTelegram} from './member-data.mjs';
+import {approvedMemberMatchUser,resolveMatchMember,approvalMessage,createMemberAdmission} from './member-access.mjs';
 ﻿import {createHash,randomBytes} from 'node:crypto';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const validId=value=>typeof value==='string'&&/^[1-9][0-9]{0,15}$/.test(value)&&Number.isSafeInteger(Number(value));
@@ -12,7 +16,9 @@ export async function lockMatchAccount(tx,userId){
 }
 function matchesConnection(user,scope){return Boolean(user?.botToken&&user.botId&&(!scope?.botId||scope.botId===user.botId)&&(!scope?.connectionToken||scope.connectionToken===user.botToken));}
 export async function approvedMatchUser(db,userId,scope={}){
+ db=authorizationDatabase(db);
  const user=await db.user.findUnique({where:{id:userId}});
+ if(user&&!user.botToken)return approvedMemberMatchUser(db,user,scope);
  if(!matchesConnection(user,scope))return null;
  const binding=await db.matchTelegramBinding.findUnique({where:{userId}});
  if(!binding||binding.botId!==user.botId||!validId(binding.chatId)||binding.chatId!==binding.telegramUserId)return null;
@@ -66,6 +72,7 @@ export async function confirmMatchChallenge(db,userId,code,clock=Date.now){
  });}catch(error){if(error?.code==='P2002')return false;throw error;}
 }
 export function createMatchAccessHandler({prisma,onAuthorized,clock=Date.now}){
+ const admit=createMemberAdmission(clock),replyAllowed=createReplyBudget(clock);
  return async function handle(ctx,update){
   if(!ctx.botId||!ctx.connectionToken)return;
   const cb=update.callback_query,msg=cb?{chat:cb.message?.chat,from:cb.from}:update.message;
@@ -74,11 +81,14 @@ export function createMatchAccessHandler({prisma,onAuthorized,clock=Date.now}){
   const scope={ownerId:ctx.ownerId,botId:ctx.botId,connectionToken:ctx.connectionToken,identity};
   const user=await approvedMatchUser(prisma,ctx.ownerId,scope);
   if(user)return onAuthorized(ctx,update,user);
+  const member=await resolveMatchMember(prisma,ctx.ownerId,identity,scope);
+  if(member){const release=admit(member.id);if(!release)return;try{const record=await prisma.telegramMember.findUnique({where:{principalId:member.id}});const {database,check}=createMemberDatabase(prisma,{member:record,generator:'match',scope,lock:lockMatchAccount});return await runInJob({...currentJob(),key:member.id,owner:false},()=>onAuthorized({...ctx,database,tg:guardedTelegram(ctx.tg,identity.chatId,check),actorId:member.id,memberVersion:member.accessVersion},update,member));}finally{release();}}
+  if(!replyAllowed(identity.telegramUserId))return;
   if(cb){await ctx.tg.api('answerCallbackQuery',{callback_query_id:cb.id,text:'Confirm pairing on your Match dashboard first.'});return;}
   if(/^\/start(?:@\w+)?(?:\s+\S+)?$/i.test(String(msg.text??'').trim())){
    const challenge=await issueMatchChallenge(prisma,scope,identity,clock);
-   if(challenge){await ctx.tg.sendMessage(identity.chatId,'Match pairing code (valid for 10 minutes):\n'+challenge.code+'\n\nSign in to your Final Whistle Match dashboard, enter this code and explicitly confirm your Telegram identity. Do not share the code.');return;}
+   if(challenge){await ctx.tg.sendMessage(identity.chatId,approvalMessage(identity.telegramUserId)+'\nMatch pairing code (valid for 10 minutes):\n'+challenge.code+'\n\nSign in to your Final Whistle Match dashboard, enter this code and explicitly confirm your Telegram identity. Do not share the code.');return;}
   }
-  await ctx.tg.sendMessage(identity.chatId,'This bot is private. Send /start to request a pairing code, then confirm it on your authenticated Match dashboard. If already requested, wait 30 seconds before requesting another code.');
+  await ctx.tg.sendMessage(identity.chatId,approvalMessage(identity.telegramUserId)+'\nThis bot is private. Send /start to request a pairing code, then confirm it on your authenticated Match dashboard. If already requested, wait 30 seconds before requesting another code.');
  };
 }

@@ -73,9 +73,40 @@ declare module "*/scripts/lib/worker-core.mjs" {
   };
 }
 
+declare module "*/scripts/lib/storage-maintenance.mjs" {
+  export const TEMP_RETENTION_MS: number;
+  export function runStorageMaintenance(options: any): Promise<any>;
+  export function runTemporaryDirectoryMaintenance(options: any): Promise<any>;
+  export function cleanupDeliveredMatchArtifacts(imagePath: string, options?: any): Promise<any>;
+  export function cleanupMatchHtmlAfterRender(imagePath: string, options?: any): Promise<any>;
+  export function measureStorageCapacity(options?: any): Promise<any>;
+  export const storageMaintenanceInternals: {
+    clearableNewsPending(pending: any, now: number, lastUpdateId?: number | null): boolean;
+    keepNewsDedupMarker(pending: any): any;
+    selectionFromRenderName(name: string): any;
+    disposition(file: any, selections: Map<string, any>, referencedNewsPaths: Set<string>, unknownNewsPending: boolean): string;
+    expired(timestamp: number, now: number, retentionMs?: number): boolean;
+    modeFromEnv(): 'dry-run' | 'apply';
+  };
+}
+
+declare module "*/scripts/lib/match-receipts.mjs" {
+  export const MATCH_RECEIPT_RETENTION_MS: number;
+  export function matchReceiptStorageReady(prisma: any): Promise<boolean>;
+  export function createMatchReceiptLease(prisma: any, clientFactory?: (name: string) => any): Promise<any>;
+  export function findActiveMatchReceipt(prisma: any, userId: string, fixtureId: number, now?: number): Promise<any>;
+  export function classifySelectionForReceipt(selection: any, match: any): 'receipt' | 'delete' | 'retain';
+  export function archiveOldMatchSelections(prisma: any, fixtureId: number, cutoff: Date, now?: number): Promise<any>;
+  export function listExpiredMatchDeliveryReceipts(prisma: any, now?: number, limit?: number): Promise<any>;
+  export function deleteExpiredMatchDeliveryReceipts(prisma: any, candidates: any[], now?: number): Promise<number>;
+  export function expireMatchDeliveryReceipts(prisma: any, now?: number, limit?: number): Promise<any>;
+}
+
 declare module "*/scripts/lib/selection.mjs" {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export function toggleSelection(o: { prisma: any; userId: string; fixtureId: number; maxAgeHours: number; now?: number }): Promise<{ result: "no-match" | "already-sent" | "sending" | "too-old" | "removed" | "selected" }>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export function setSelectionState(o: { prisma: any; userId: string; fixtureId: number; selected:boolean; maxAgeHours: number; now?: number }): Promise<{ result: "no-match" | "already-sent" | "sending" | "too-old" | "removed" | "selected" }>;
 }
 
 declare module "*/scripts/lib/poller.mjs" {

@@ -4,7 +4,10 @@ let browserPromise = null;
 let currentBrowser = null;
 function getBrowser() {
   if (!browserPromise) {
-    browserPromise = chromium.launch()
+    // Browser children do not need database, bot or API credentials. No insecure fallback.
+    const allowed=new Set(['PATH','PATHEXT','SYSTEMROOT','WINDIR','SYSTEMDRIVE','TEMP','TMP','TMPDIR','USERPROFILE','LOCALAPPDATA','APPDATA','PROGRAMFILES','PROGRAMFILES(X86)','COMSPEC','HOME','LANG','LC_ALL','DISPLAY','WAYLAND_DISPLAY','XDG_RUNTIME_DIR']);
+    const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>allowed.has(key.toUpperCase())));
+    browserPromise = chromium.launch({chromiumSandbox:true,env})
       .then((browser) => {
         currentBrowser = browser;
         // If Chromium dies, start a fresh one on the next render instead of failing until a restart
@@ -33,7 +36,7 @@ let contextPromise = null;
 function getContext() {
   if (!contextPromise) {
     contextPromise = getBrowser()
-      .then((browser) => browser.newContext({ viewport: { width: 1080, height: 1350 }, deviceScaleFactor: 2 }))
+      .then((browser) => browser.newContext({ viewport: { width: 1080, height: 1350 }, deviceScaleFactor: 2,acceptDownloads:false,serviceWorkers:'block' }))
       .catch((err) => {
         contextPromise = null;
         throw err;

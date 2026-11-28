@@ -1,3 +1,5 @@
+require('../scripts/lib/runtime-environment.cjs').restrictRendererEnvironment();
+require('../scripts/lib/security-log.cjs').install();
 // render-server.js
 // A small, persistent local HTTP server. The worker (scripts/worker.mjs) and the dashboard call it
 // (POST /render) to draw a result post with Chromium and return a native PNG plus compatibility JPEG.
@@ -25,6 +27,11 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// Scope browser/native scratch data to this application's ACL-protected storage.
+// This changes only the renderer process environment, not Windows or other programs.
+const PRIVATE_TEMP = path.resolve(__dirname, '..', 'storage', 'renderer-tmp');
+fs.mkdirSync(PRIVATE_TEMP,{recursive:true,mode:0o700});
+process.env.TEMP=process.env.TMP=process.env.TMPDIR=PRIVATE_TEMP;
 const crypto = require('crypto');
 const { leagueAccents } = require('./league-accents.js');
 const { pathToFileURL, fileURLToPath } = require('url');
@@ -214,7 +221,13 @@ const server = http.createServer(async (req,res) => {
   const deadline=setTimeout(()=>controller.abort(),110000);deadline.unref?.();
   let release;
   try{
-    release=await renderGate.acquire();
+    const owner=req.headers['x-fw-owner']!=='0';
+    release=await renderGate.acquire({owner});
+    const key=String(req.headers['x-fw-job-key']??'');
+    if(!owner&&!/^[a-f0-9]{64}$/.test(key))throw Object.assign(Error('Invalid job admission'),{statusCode:400});
+    const {runInJob}=await import('../scripts/lib/job-scheduler.mjs');
+    const {admitImage}=await import('../scripts/lib/resource-budget.mjs');
+    await runInJob({key,owner},()=>admitImage({directory:ROOT}));
     controller.signal.throwIfAborted();
     if(req.destroyed)return;
     if(req.url==='/render-news'){await handleNewsRequest(req,res,controller.signal);return;}
@@ -460,6 +473,12 @@ server.listen(PORT, '127.0.0.1', () => {
     let page,releaseWarmup;
     try {
       releaseWarmup=await renderGate.acquire();
+      // This callback runs only after this process successfully owns the loopback port,
+      // and before its first Chromium context is created. The maintenance mode defaults
+      // to dry-run; the private temp tree is never swept while an admitted render is active.
+      const {runTemporaryDirectoryMaintenance}=await import('../scripts/lib/storage-maintenance.mjs');
+      const maintenance=await runTemporaryDirectoryMaintenance({name:'rendererTemp',log:message=>console.log(message)});
+      if(maintenance.mode==='dry-run'&&maintenance.candidates.length)console.log(`[maintenance dry-run] abandoned renderer profiles=${maintenance.candidates.length}`);
       const context = await getContext();
       page = await context.newPage();
       const png=await withPageDeadline(page,async()=>{

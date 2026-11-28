@@ -128,7 +128,7 @@ describe('pre-merge News routing and photo-state regressions',()=>{
   });
   it('cancels a failed collection and starts a fresh News conversation',async()=>{
     const f=bot(createStandingsService({id:'fictional',getCurrentTable:()=>fictionalTable()}));
-    await f.handle(f.update(1,{photo:[{file_id:'photo-B'}],caption:'Premier League 21'}));await f.handle(f.update(2,{text:'/cancel'}));expect(f.settings.pending).toEqual({});
+    await f.handle(f.update(1,{photo:[{file_id:'photo-B'}],caption:'Premier League 21'}));await f.handle(f.update(2,{text:'/cancel'}));expect(f.settings.pending).toMatchObject({lastAppliedUpdateId:2});
     await f.handle(f.update(3,{photo:[{file_id:'photo-C'}]}));await f.handle(f.update(4,{text:'Author | New story'}));await f.finish();expect(f.download).toHaveBeenCalledExactlyOnceWith('photo-C');expect(f.render.mock.calls[0][0]).not.toMatchObject({layout:'standings'});
   });
   it('starts a new standings conversation after cancellation',async()=>{

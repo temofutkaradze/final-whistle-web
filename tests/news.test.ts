@@ -21,10 +21,11 @@ function fixture(linked = true) {
   const config={...DEFAULT_NEWS_STYLE,accent:'#123456',textSize:80};
   const tg={sendMessage:vi.fn(async(..._args:unknown[])=>({ok:true})),sendDocument:vi.fn(async()=>{})};
   const render=vi.fn(async(..._args:unknown[])=>'/fake/news.png');
+  const cleanup=vi.fn(async()=>{});
   const diagnostic=vi.fn();
-  const handle=createNewsHandler({prisma:{newsSettings:table,newsTemplate:{findFirst:vi.fn(async()=>({config}))}},tg,ownerId:'owner',connectionToken:settings.botToken,download:vi.fn(async()=>Buffer.from('image')),render,cleanup:vi.fn(async()=>{}),now:()=>now,onDiagnostic:diagnostic});
+  const handle=createNewsHandler({prisma:{newsSettings:table,newsTemplate:{findFirst:vi.fn(async()=>({config}))}},tg,ownerId:'owner',connectionToken:settings.botToken,download:vi.fn(async()=>Buffer.from('image')),render,cleanup,now:()=>now,onDiagnostic:diagnostic});
   const update=(id:number,message:Record<string,unknown>,chat=42)=>({update_id:id,message:{chat:{id:chat,type:'private'},from:{id:chat},...message}});
-  return {settings,tg,render,diagnostic,handle,update,config};
+  return {settings,tg,render,cleanup,diagnostic,handle,update,config};
 }
 
 describe('News original conversation',()=>{
@@ -69,6 +70,25 @@ describe('News quote typography fitting',()=>{
 });
 
 describe('News bot integration with mocked Telegram and persistence',()=>{
+  it('retains the rendered file path after an ambiguous News document delivery',async()=>{
+    const f=fixture();f.tg.sendDocument.mockRejectedValueOnce(new Error('network timeout'));
+    await f.handle(f.update(1,photo));await f.handle(f.update(2,{text:'AUTHOR | A HEADLINE'}));await f.handle(f.update(3,{text:'No'}));
+    expect(f.settings.pending).toMatchObject({stage:'sending',requestId:3,outputPath:'/fake/news.png'});
+    expect(f.cleanup).not.toHaveBeenCalled();
+  });
+  it('retains a News output after Telegram rate limiting so the retryable result is not swept',async()=>{
+    const f=fixture();f.tg.sendDocument.mockRejectedValueOnce(Object.assign(new Error('rate limited'),{telegramCode:429}));
+    await f.handle(f.update(1,photo));await f.handle(f.update(2,{text:'AUTHOR | A HEADLINE'}));await f.handle(f.update(3,{text:'No'}));
+    expect(f.settings.pending).toMatchObject({stage:'sending',requestId:3,outputPath:'/fake/news.png'});
+    expect(f.cleanup).not.toHaveBeenCalled();
+  });
+  it('resumes a persisted rendering stage after the same Telegram update is replayed',async()=>{
+    const f=fixture();await f.handle(f.update(1,photo));await f.handle(f.update(2,{text:'AUTHOR | A NEWS HEADLINE'}));f.render.mockRejectedValueOnce(Error('temporary renderer interruption'));
+    const retry=f.update(3,{text:'No'});await f.handle(retry);
+    expect(f.settings.pending).toMatchObject({stage:'rendering',requestId:3,background:'background',job:{quote:'A NEWS HEADLINE'}});
+    await f.handle(retry);
+    expect(f.render).toHaveBeenCalledTimes(2);expect(f.tg.sendDocument).toHaveBeenCalledTimes(1);expect(f.settings.pending).toMatchObject({stage:'delivered',requestId:3});
+  });
   it.each([1,3])('returns %s Branding photos after one selection',async count=>{
     const f=fixture();
     for(let i=0;i<count;i++)await f.handle(f.update(i+1,{photo:[{file_id:`photo-${i}`}],...(count>1?{media_group_id:'album'}:{})}));

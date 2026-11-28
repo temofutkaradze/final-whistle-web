@@ -57,7 +57,7 @@ module.exports = function createNewsRenderer({
       const scale=Math.max(1,Math.min(2160/source.width,2700/source.height));
       const width=Math.round(source.width*scale),height=Math.round(source.height*scale);
       const browser=await getBrowser();
-      const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:1});
+      const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:1,acceptDownloads:false,serviceWorkers:'block'});
       try{
         const page=await context.newPage();
         const png=await withPageDeadline(page,async()=>{
@@ -128,6 +128,8 @@ module.exports = function createNewsRenderer({
       // shared Chromium capture and Sharp exporter as Match.
       viewport: { width: 2160, height: 2700 },
       deviceScaleFactor: 1,
+      acceptDownloads:false,
+      serviceWorkers:'block',
     });
 
     try {

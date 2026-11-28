@@ -1,9 +1,10 @@
+import {verifiedDatabaseUrl} from './database-tls.mjs';
 ﻿// Dedicated, non-pooled PostgreSQL sessions own process locks. No schema objects.
 import pg from 'pg';
 const NAMESPACE=1179996748;
 export const PROCESS_LOCKS={matchBot:1296127043,matchWorker:1297568331,news:1313167187};
 export function lockConnectionString(value){
-  const url=new URL(value);
+  const url=new URL(verifiedDatabaseUrl(value));
   if(url.hostname.endsWith('.neon.tech'))url.hostname=url.hostname.replace(/-pooler(?=\.)/,'');
   return url.toString();
 }

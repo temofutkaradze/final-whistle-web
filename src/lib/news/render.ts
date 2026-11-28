@@ -1,3 +1,4 @@
+import {renderSecurityHeaders} from '../../../scripts/lib/render-security-headers.mjs';
 ﻿
 import type { StandingsJob } from "./standings.ts";
 import type { Job } from "./parse.ts";
@@ -39,7 +40,7 @@ export async function renderNewsPost(
   let response:Response;
   try { response = await fetch(endpoint('/render-news'), {
     method: "POST",
-    headers: auth,
+    headers: {...auth,...renderSecurityHeaders()},
     body: JSON.stringify({
       job: {...job,pos:{
         b:job.pos.b.map((n,index)=>Number.isFinite(n)?n:[50,50,1][index]),

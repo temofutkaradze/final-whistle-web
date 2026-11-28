@@ -35,6 +35,27 @@ model User {
   authIdentities AuthIdentity[]
   matchPairingChallenges MatchPairingChallenge[]
   matchTelegramBinding MatchTelegramBinding?
+  matchDeliveryReceipts MatchDeliveryReceipt[]
+  telegramMembers TelegramMember[] @relation("TelegramMemberOwner")
+  telegramMembership TelegramMember? @relation("TelegramMemberPrincipal")
+}
+
+// Delegated access uses isolated principals without logins or bot credentials.
+model TelegramMember {
+  id String @id @default(cuid())
+  ownerId String
+  principalId String @unique
+  telegramUserId String @db.VarChar(16)
+  displayName String? @db.VarChar(80)
+  status String @default("ACTIVE") @db.VarChar(16)
+  matchAccess Boolean @default(false)
+  newsAccess Boolean @default(false)
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  owner User @relation("TelegramMemberOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  principal User @relation("TelegramMemberPrincipal", fields: [principalId], references: [id], onDelete: Cascade)
+  @@unique([ownerId, telegramUserId])
 }
 
 // Google identities are bound by verified provider subject, never inferred from an email match.
@@ -258,4 +279,23 @@ model MatchTelegramBinding {
   chatId String
   authorizedAt DateTime @default(now())
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Compact terminal delivery/deduplication state retained after old Match rows are pruned.
+// This intentionally has no relation to Match, so receipt retention survives Match deletion.
+model MatchDeliveryReceipt {
+  userId           String
+  fixtureId        Int
+  finalStatus      String
+  finalSentAt      DateTime?
+  finalDispatchAt  DateTime?
+  liveStatus       String
+  liveSentAt       DateTime?
+  liveDispatchAt   DateTime?
+  createdAt        DateTime @default(now())
+  expiresAt        DateTime
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, fixtureId])
+  @@index([expiresAt])
 }

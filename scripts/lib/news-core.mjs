@@ -19,7 +19,14 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
     if(!Number.isSafeInteger(update.update_id)||!isActive())return;
     const settings=await table.findUnique({where:{userId:ownerId}});
     if(!settings?.botToken||(connectionToken&&settings.botToken!==connectionToken))return;
-    const claim=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,OR:[{lastUpdateId:null},{lastUpdateId:{lt:update.update_id}}]},data:{lastUpdateId:update.update_id}});
+    const savedPending=settings.pending;
+    const resumingRender=savedPending?.stage==='rendering'&&savedPending.requestId===update.update_id&&savedPending.job;
+    const resumingBranding=savedPending?.stage==='rendering'&&savedPending.requestId===update.update_id&&Array.isArray(savedPending.brandingPhotos);
+    const sameAppliedUpdate=savedPending?.lastAppliedUpdateId===update.update_id;
+    if(sameAppliedUpdate&&!resumingRender&&!resumingBranding&&!['sending','delivered'].includes(savedPending?.stage))return;
+    const claim=(resumingRender||resumingBranding)
+      ?await table.updateMany({where:{userId:ownerId,botToken:settings.botToken},data:{lastUpdateId:update.update_id}})
+      :await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,OR:[{lastUpdateId:null},{lastUpdateId:{lt:update.update_id}}]},data:{lastUpdateId:update.update_id}});
     if(!claim.count)return;
     const msg=update.message;
     if(!msg||msg.chat?.type!=='private')return;
@@ -29,6 +36,10 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       const response=await tg.sendMessage(chatId,text,...(extra?[extra]:[]));
       if(response?.ok===false)throw new Error('TELEGRAM_REPLY_FAILED');
     };
+    if(['sending','delivered'].includes(settings.pending?.stage)&&settings.pending.requestId===update.update_id){
+      await reply(settings.pending.stage==='delivered'?'This request has already been delivered.':'A file delivery may already have completed for this request. Check the chat before sending it again.');
+      return;
+    }
     const start=(msg.text??'').trim().match(/^\/start(?:@\w+)?(?:\s+(\S+))?$/i);
     if(settings.telegramChatId!==chatId){
       const code=start?.[1];
@@ -42,33 +53,34 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
     let phase='parse';
     let output;
     let delivered=false;
+    let preserveOutput=false;
     let transition;
     let manualRecovery;
     try{
       const raw=settings.pending;
       const uploaded=newsImageFileId(msg);
-      if(uploaded&&msg.media_group_id){
+    if(uploaded&&msg.media_group_id){
         const same=raw?.mediaGroup===String(msg.media_group_id)&&now()-(raw.ts??0)<=3600000;
         const photos=same?[...new Set([...(raw.brandingPhotos??[raw.background]),uploaded])]:[uploaded];
-        const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:{background:photos[0],circle:null,brandingPhotos:photos.slice(0,10),mediaGroup:String(msg.media_group_id),ts:now()}}});
+        const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:{background:photos[0],circle:null,brandingPhotos:photos.slice(0,10),mediaGroup:String(msg.media_group_id),ts:now(),lastAppliedUpdateId:update.update_id}}});
         if(saved.count&&!same&&isActive())await reply('Choose a template. Branding applies to every photo in this album.',EDITORIAL_KEYBOARD);
         return;
       }
       if((msg.text??'').trim()==='Branding'&&raw?.background&&now()-(raw.ts??0)<=3600000){
         const photos=raw.brandingPhotos??[raw.background];
-        const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:{stage:'rendering',requestId:update.update_id}}});
+        const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:{stage:'rendering',requestId:update.update_id,background:raw.background,brandingPhotos:photos,nextPhoto:0,ts:now(),lastAppliedUpdateId:update.update_id}}});
         if(!saved.count||!isActive())return;
         for(const id of photos){
           if(!isActive())return;
           phase='download';const background=await download(id);
           phase='render';output=await render({layout:'single',brandingOnly:true,branding:true,caption:'',author:'',quote:'',pos:{b:[50,50,1],c:[50,30,1]}},background,null);
-          const active=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'sending',requestId:update.update_id}}});
+          const active=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'sending',requestId:update.update_id,outputPath:output,lastAppliedUpdateId:update.update_id}}});
           if(!active.count||!isActive())return;
           phase='send';await tg.sendDocument(chatId,output,'','news-branding.png');
           await cleanup(output).catch(()=>{});output=undefined;
         }
         delivered=true;
-        await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'delivered',requestId:update.update_id}}});
+        await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'delivered',requestId:update.update_id,lastAppliedUpdateId:update.update_id}}});
         return;
       }
       // Read old sessions safely, but do not resume any old caption-driven job.
@@ -80,7 +92,10 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       }
       const brandingChoices={reply_markup:{keyboard:[[{text:'Yes'},{text:'No'}]],resize_keyboard:true,one_time_keyboard:true}};
       const brandingAnswer=raw?.stage==='branding'&&!newsImageFileId(msg)&&!/^\//.test((msg.text??'').trim());
-      if(brandingAnswer){
+      const resume=raw?.stage==='rendering'&&raw.requestId===update.update_id&&raw.background&&raw.job;
+      if(resume){
+        transition={pending:null,background:raw.background,circle:raw.circle??null,job:raw.job};
+      }else if(brandingAnswer){
         if(now()-(raw.ts??0)>3600000){
           transition={pending:null,reply:'This post expired. Send a new background image.'};
         }else if(!['Yes','No'].includes((msg.text??'').trim())){
@@ -97,20 +112,20 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
           if(error instanceof StandingsError){
             // Retain this request's latest photo, never an older collection. Do not
             // overwrite a newer update or a revoked connection while the API awaited.
-            const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:transition.collection}});
+            const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:{...transition.collection,lastAppliedUpdateId:update.update_id}}});
             if(saved.count&&isActive())await reply(error.message);
             return;
           }
           throw error;
         }
       }
-      if('job' in transition&&!brandingAnswer){
+      if('job' in transition&&!brandingAnswer&&!resume){
         transition={pending:{stage:'branding',background:transition.background,circle:transition.circle??null,job:transition.job,ts:now()},reply:'Add branding?',replyOptions:brandingChoices};
       }
       if('job' in transition&&transition.job.editorial?.template==='large-headline'&&transition.job.editorial.layoutMode==='manual'){
         manualRecovery={stage:'editorial',background:transition.background,circle:null,template:'large-headline',layoutMode:'manual',step:'fit',bottomOffset:transition.job.editorial.bottomOffset,headline:transition.job.editorial.headline,ts:now()};
       }
-      const state='job' in transition?{stage:'rendering',requestId:update.update_id}:transition.pending??{};
+      const state='job' in transition?{stage:'rendering',requestId:update.update_id,background:transition.background,circle:transition.circle??null,job:transition.job,ts:now(),lastAppliedUpdateId:update.update_id}:{...(transition.pending??{}),lastAppliedUpdateId:update.update_id};
       const saved=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:state}});
       if(!saved.count||!isActive())return;
       if('reply' in transition){phase='reply';
@@ -125,16 +140,20 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
       phase='render';output=await render(transition.job,background,circle);
       if(!isActive())return;
       // Recheck that a disconnect/reconnect did not revoke this worker mid-render.
-      const active=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'sending',requestId:update.update_id}}});
+      const active=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'sending',requestId:update.update_id,outputPath:output,lastAppliedUpdateId:update.update_id}}});
       if(!active.count||!isActive())return;
       phase='send';
       await tg.sendDocument(chatId,output,transition.job.caption.slice(0,1000),output.toLowerCase().endsWith('.png')?'news-post.png':'news-post.jpg');
       delivered=true;
       phase='commit';
-      await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'delivered',requestId:update.update_id}}});
+      await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId},data:{pending:{stage:'delivered',requestId:update.update_id,lastAppliedUpdateId:update.update_id}}});
     }catch(error){
+      // A transport failure without a definitive Telegram rejection is ambiguous.
+      // Keep the output referenced in pending JSON so maintenance cannot remove it.
+      const telegramCode=error?.telegramCode;
+      if(phase==='send'&&!error?.deliveryNotAttempted&&(!Number.isInteger(telegramCode)||telegramCode===429||telegramCode>=500)){preserveOutput=true;output=undefined;}
       if(error?.code==='NEWS_MANUAL_LAYOUT_UNSAFE'&&manualRecovery&&isActive()){
-        const restored=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:manualRecovery}}).catch(()=>({count:0}));
+        const restored=await table.updateMany({where:{userId:ownerId,botToken:settings.botToken,telegramChatId:chatId,lastUpdateId:update.update_id},data:{pending:{...manualRecovery,lastAppliedUpdateId:update.update_id}}}).catch(()=>({count:0}));
         if(restored.count&&isActive())await reply('That manual headline cannot fit safely at this size and offset. Change the headline or offset; the renderer will not reflow your lines.',manualHeadlineRecoveryChoices).catch(()=>{});
         return;
       }
@@ -147,6 +166,6 @@ export function createNewsHandler({prisma,tg,ownerId,connectionToken,download,re
           ?'Telegram did not confirm the branded photo delivery. Please check which photos arrived before sending missing photos again.'
           :'The branded photo could not be completed. Please send the photo or remaining photos again and select Branding.').catch(()=>{});
       }
-    }finally{if(output)await cleanup(output).catch(()=>{});}
+    }finally{if(output&&!preserveOutput)await cleanup(output).catch(()=>{});}
   };
 }

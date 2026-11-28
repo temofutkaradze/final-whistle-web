@@ -1,16 +1,30 @@
 import {randomUUID} from 'node:crypto';
 import {approvedMatchUser} from './match-pairing.mjs';
 import {buildEventsHtml} from './events.mjs';
+import {createMatchReceiptLease} from './match-receipts.mjs';
 
 // Manual deliveries intentionally never update automatic status, attempts, sentAt or dispatch fences.
-export async function regenerateAssignedMatches({prisma,userId,backgroundPath,fixtureId,scope,tg,renderPost,brandLookFields,isActive=()=>true}) {
+export async function regenerateAssignedMatches({prisma,userId,backgroundPath,fixtureId,scope,tg,renderPost,brandLookFields,cleanupMatchArtifacts=async()=>{},cleanupMatchHtml=async()=>{},receiptLeaseFactory=createMatchReceiptLease,isActive=()=>true}) {
   const selections=await prisma.selection.findMany({where:{userId,backgroundPath,status:{not:'DESELECTED'},...(fixtureId==='all'?{}:{fixtureId})},include:{match:true}});
   const result={sent:0,unavailable:0,failed:0};
-  for(const sel of selections){
+  let receiptLease=null;
+  if(selections.length){
+    try{receiptLease=await receiptLeaseFactory(prisma);}
+    catch{return {...result,failed:selections.length};} // Fail closed if receipt-aware cleanup is installed but its lease cannot be acquired.
+  }
+  try{for(const sel of selections){
     if(!isActive()||!await approvedMatchUser(prisma,userId,scope))break;
-    const match=sel.match;
-    if(!Number.isInteger(match.homeScore)||!Number.isInteger(match.awayScore)||match.homeScore<0||match.awayScore<0){result.unavailable++;continue;}
+    let releaseLease=null;
     try{
+      if(receiptLease){
+        releaseLease=await receiptLease.acquire(sel.fixtureId);
+        if(!releaseLease){result.failed++;continue;}
+      }
+      const current=receiptLease?await prisma.selection.findFirst({where:{id:sel.id,userId},include:{match:true}}):sel;
+      if(!current||current.status==='DESELECTED'||!current.match){result.unavailable++;continue;}
+      const match=current.match;
+      if(!Number.isInteger(match.homeScore)||!Number.isInteger(match.awayScore)||match.homeScore<0||match.awayScore<0){result.unavailable++;continue;}
+      if(!isActive()||!await approvedMatchUser(prisma,userId,scope))break;
       const brand=await prisma.brand.findFirst({where:{userId},orderBy:{createdAt:'desc'}});
       let custom={};
       if(brand?.templateRef?.startsWith('custom:')){
@@ -22,10 +36,19 @@ export async function regenerateAssignedMatches({prisma,userId,backgroundPath,fi
         league_id:match.leagueId,league_logo:match.leagueLogo,home_logo:match.homeLogo,away_logo:match.awayLogo,
         home_team:match.homeTeam,away_team:match.awayTeam,home_score:match.homeScore,away_score:match.awayScore,
         ...buildEventsHtml(match.eventsJson??[],{home_team_id:match.homeTeamId,away_team_id:match.awayTeamId,home_team:match.homeTeam,away_team:match.awayTeam,home_score:match.homeScore,away_score:match.awayScore})});
+      await cleanupMatchHtml(jpg).catch(()=>{});
       if(!isActive()||!await approvedMatchUser(prisma,userId,scope))break;
-      await tg.sendDocument(scope.identity.chatId,jpg,`Manual regeneration — ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+      await receiptLease?.assertHeld?.(sel.fixtureId);
+      await tg.sendDocument(scope.identity.chatId,jpg,`Manual regeneration — ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`,undefined,{beforeDispatch:async()=>{
+        if(!isActive()||!await approvedMatchUser(prisma,userId,scope))throw Object.assign(Error('Access revoked'),{deliveryNotAttempted:true});
+        await receiptLease?.assertHeld?.(sel.fixtureId);
+      }});
+      // Cleanup is requested only after Telegram confirms the document was accepted.
+      await cleanupMatchArtifacts(jpg).catch(()=>{});
       result.sent++;
     }catch{result.failed++;} // No automatic Telegram resend when delivery is ambiguous.
+    finally{await releaseLease?.();}
   }
+  }finally{await receiptLease?.close();}
   return result;
 }

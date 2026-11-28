@@ -1,3 +1,4 @@
+import {registrationAllowed} from '@/lib/local-security';
 import { authAdmission } from "@/lib/admission";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -14,6 +15,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 async function createAccount(formData: FormData) {
   "use server";
 
+  if(!registrationAllowed())redirect('/login');
   const rawEmail=formData.get("email");
   if(typeof rawEmail!=='string'||rawEmail.length>MAX_EMAIL)redirect('/signup?error=email');
   const email = rawEmail.trim().toLowerCase();
@@ -52,6 +54,7 @@ export default async function SignUp({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
+  if(!registrationAllowed())redirect('/login');
   if (await getCurrentUser()) redirect("/dashboard");
   const { error } = await searchParams;
 

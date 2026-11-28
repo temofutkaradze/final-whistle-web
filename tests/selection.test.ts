@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { toggleSelection } from "../scripts/lib/selection.mjs";
+import { setSelectionState, toggleSelection } from "../scripts/lib/selection.mjs";
 import { createFakeDb } from "./helpers/fake-prisma";
 
 
@@ -103,4 +103,16 @@ describe('worker claim between selection lookup and deletion',()=>{
     await toggle();db.failNext('selection','deleteMany',new Error('database unavailable'));
     await expect(toggle()).rejects.toThrow('database unavailable');expect(selections()).toHaveLength(1);
   });
+});
+
+describe('idempotent Telegram callback intent',()=>{
+ it('replayed select callbacks preserve the original target state instead of toggling twice',async()=>{
+  const args={prisma:db.prisma,userId:'u1',fixtureId:1,maxAgeHours:24,now:NOW};
+  expect(await setSelectionState({...args,selected:true})).toEqual({result:'selected'});
+  expect(await setSelectionState({...args,selected:true})).toEqual({result:'selected'});
+  expect(selections()[0].status).toBe('SELECTED');
+  expect(await setSelectionState({...args,selected:false})).toEqual({result:'removed'});
+  expect(await setSelectionState({...args,selected:false})).toEqual({result:'removed'});
+  expect(selections()).toHaveLength(0);
+ });
 });

@@ -1,3 +1,6 @@
+import './lib/runtime-security-bootstrap.mjs';
+import logging from './lib/security-log.cjs';
+logging.install();
 // Worker: finds finished matches, builds the post for every customer who picked the match,
 // and sends it to their Telegram chat.
 // Run with:  npm run worker      (keep this window open; the render server must run too)
@@ -5,7 +8,6 @@
 // The logic lives in lib/worker-core.mjs (so it can be tested); this file connects it to the real database,
 // the real match data, the render server and Telegram, and runs it once a minute.
 
-import { unlink } from "node:fs/promises";
 import { prisma } from "./lib/db.mjs";
 import {acquireProcessLock,processLockClient,PROCESS_LOCKS} from "./lib/process-lock.mjs";
 let stopping=false,workerLock;
@@ -17,6 +19,7 @@ import { DEFAULT_BACKGROUND, brandLookFields, downloadBackground, fileExists, re
 import { fetchEvents, isDead, isFinished, localDate, refreshStatuses, saveEvents } from "./lib/football.mjs";
 import * as config from "./lib/config.mjs";
 import { createWorkerCore } from "./lib/worker-core.mjs";
+import { cleanupDeliveredMatchArtifacts, cleanupMatchHtmlAfterRender, measureStorageCapacity, runStorageMaintenance } from "./lib/storage-maintenance.mjs";
 
 async function pickBackground(sel, brand) {
   if (sel.backgroundPath && (await fileExists(sel.backgroundPath))) return { background_path: sel.backgroundPath };
@@ -41,7 +44,9 @@ const worker = createWorkerCore({
   brandLookFields,
   pickBackground,
   telegramForUser,
-  unlink,
+  cleanupMatchArtifacts: cleanupDeliveredMatchArtifacts,
+  cleanupMatchHtml: cleanupMatchHtmlAfterRender,
+  storageMaintenance: { runStorageMaintenance, measureStorageCapacity },
   localDate,
   config,
 });

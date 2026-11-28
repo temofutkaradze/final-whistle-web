@@ -1,7 +1,9 @@
 // A customer taps a match button in Telegram: select it, or take the selection back.
 // Returns what happened, so bot.mjs can answer the tap. Written to survive double taps and a post that is being sent.
+import {findActiveMatchReceipt} from './match-receipts.mjs';
 
 export async function toggleSelection({ prisma, userId, fixtureId, maxAgeHours, now = Date.now() }) {
+  if (await findActiveMatchReceipt(prisma, userId, fixtureId, now)) return { result: "already-sent" };
   const match = await prisma.match.findUnique({ where: { fixtureId } });
   if (!match) return { result: "no-match" };
 
@@ -41,7 +43,26 @@ export async function toggleSelection({ prisma, userId, fixtureId, maxAgeHours, 
   try {
     await prisma.selection.create({ data: { userId, fixtureId } });
   } catch (e) {
-    if (e?.code !== "P2002") throw e; // a second tap selected it a moment earlier: same result
+    if (e?.code === "P2002") return { result: "selected" }; // a second tap selected it a moment earlier
+    if (e?.code === 'P2003') {
+      if (await findActiveMatchReceipt(prisma, userId, fixtureId, now)) return { result: 'already-sent' };
+      if (!await prisma.match.findUnique({ where: { fixtureId } })) return { result: 'no-match' };
+    }
+    throw e;
   }
   return { result: "selected" };
+}
+
+// Callback replay is common after a cursor write is interrupted. Use the original
+// button state as the desired state, so redelivery of one callback cannot toggle twice.
+export async function setSelectionState({prisma,userId,fixtureId,selected,maxAgeHours,now=Date.now()}){
+  const existing=await prisma.selection.findUnique({where:{userId_fixtureId:{userId,fixtureId}}});
+  const current=Boolean(existing&&existing.status!=='DESELECTED');
+  if(current===selected){
+    if(!selected)return {result:'removed'};
+    if(existing.status==='COMPLETED')return {result:'already-sent'};
+    if(existing.status==='SENDING'||existing.liveStatus==='SENDING')return {result:'sending'};
+    return {result:'selected'};
+  }
+  return toggleSelection({prisma,userId,fixtureId,maxAgeHours,now});
 }

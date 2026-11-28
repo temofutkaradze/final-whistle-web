@@ -1,3 +1,4 @@
+import {registrationAllowed} from './local-security';
 ﻿import { prisma } from '@/lib/db';
 import type { GoogleProfile } from '@/lib/google';
 
@@ -23,6 +24,7 @@ export async function resolveGoogleUser(profile: GoogleProfile): Promise<GoogleS
           : { ok: false as const, reason: 'account_conflict' as const };
       }
 
+      if(!registrationAllowed())return {ok:false as const,reason:'account_conflict' as const};
       const user = await tx.user.create({
         data: {
           email: profile.email,

@@ -74,6 +74,13 @@ const match = (id: number) => db.tables.match.find((m) => m.fixtureId === id)!;
 const advance = (minutes: number) => (clock.now += minutes * MIN);
 const finishedWithEvents = (id: number, hs = 1, as = 0) => addMatch(id, { statusShort: "FT", homeScore: hs, awayScore: as, eventsJson: hs + as ? [GOAL(10)] : [] });
 
+function addSharedMember() {
+  addUser('delegate',{botToken:null,botId:null,telegramChatId:null});
+  const member={id:'membership',ownerId:'u1',principalId:'delegate',telegramUserId:'202',status:'ACTIVE',matchAccess:true,newsAccess:true,version:1};
+  (db.prisma as any).telegramMember={findUnique:async({where}:any)=>where.principalId==='delegate'?member:null};
+  return member;
+}
+
 // A scheduled provider observation: same fixture-list request, no event calls.
 function observeLive(id=1, elapsed=90, extra:number|null=null, home=2, away=1, status='2H') {
   const shot=checkpointFromFixture({fixture:{status:{short:status,elapsed,extra}},goals:{home,away}},new Date(clock.now));
@@ -85,6 +92,13 @@ function observeLive(id=1, elapsed=90, extra:number|null=null, home=2, away=1, s
 beforeEach(() => {
   clock = { now: T0 };
   db = createFakeDb(clock);
+  const originalRaw=db.prisma.$queryRaw;
+  db.prisma.$queryRaw=async(strings:TemplateStringsArray,...values:any[])=>{
+    if(strings.join('').includes('jsonb_array_elements_text')){
+      const ids=JSON.parse(values[1]);return db.tables.match.filter(m=>ids.includes(m.fixtureId)&&m.kickoff<values[2]).map(m=>({fixtureId:m.fixtureId,leased:true}));
+    }
+    return originalRaw(strings,...values);
+  };
   tg = { sendDocument: vi.fn(async () => {}), sendMessage: vi.fn(async () => {}) };
   renderPost = vi.fn(async () => "/tmp/post.jpg");
   build = vi.fn(buildEventsHtml);
@@ -151,7 +165,7 @@ describe("worker: the normal path", () => {
     expect(renderPost).toHaveBeenCalledTimes(1);
     expect(renderPost.mock.calls[0][0]).toMatchObject({ fixture_id: "1_s1", league_id: 39, home_team: "Alpha FC", home_score: 2, away_score: 1, page_name: "Page u1" });
     expect(tg.sendDocument).toHaveBeenCalledTimes(1);
-    expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Full Time — Alpha FC 2-1 Beta FC");
+    expect(tg.sendDocument).toHaveBeenCalledWith("101", "/tmp/post.jpg", "Full Time — Alpha FC 2-1 Beta FC",undefined,{beforeDispatch:expect.any(Function)});
     expect(sel("s1")).toMatchObject({ status: "COMPLETED", sentAt: new Date(T0) });
     await core.tick();
     advance(5);
@@ -522,25 +536,57 @@ describe("worker: housekeeping", () => {
     expect(sel("busy").status).toBe("SENDING");
   });
 
-  it("cleanup removes old matches with their selections and photos, and old list and usage records", async () => {
+  it("cleanup preserves selection receipts and backgrounds while removing unselected old match rows", async () => {
     addMatch(1, { kickoff: new Date(T0 - 50 * 3600e3) });
     addMatch(2, { kickoff: new Date(T0 - 5 * 3600e3) });
     addSel("old", "u1", 1, { backgroundPath: path.resolve("storage/backgrounds/old.jpg") });
     addSel("new", "u1", 2, { backgroundPath: path.resolve("storage/backgrounds/new.jpg") });
+    addMatch(3, { kickoff: new Date(T0 - 50 * 3600e3) });
     db.tables.fixtureDay.push({ date: "2026-10-01" }, { date: "2026-10-10" });
     db.tables.apiUsage.push({ day: "2026-09-01", count: 5 }, { day: "2026-10-10", count: 5 });
     await makeCore().cleanup();
-    expect(db.tables.match.map((m) => m.fixtureId)).toEqual([2]);
-    expect(db.tables.selection.map((s) => s.id)).toEqual(["new"]);
-    expect(unlink).toHaveBeenCalledTimes(1);
-    expect(unlink).toHaveBeenCalledWith(path.resolve("storage/backgrounds/old.jpg"));
+    expect(db.tables.match.map((m) => m.fixtureId)).toEqual([1, 2]);
+    expect(db.tables.selection.map((s) => s.id)).toEqual(["old", "new"]);
+    expect(unlink).not.toHaveBeenCalled();
+    expect(db.tables.selection[0].backgroundPath).toBe(path.resolve("storage/backgrounds/old.jpg"));
     expect(db.tables.fixtureDay.map((d) => d.date)).toEqual(["2026-10-10"]);
     expect(db.tables.apiUsage.map((d) => d.day)).toEqual(["2026-10-10"]);
   });
+  it('cleanup advances past a full retained batch without deleting unresolved selections and wraps safely',async()=>{
+    for(let id=1;id<=50;id++){addMatch(id,{kickoff:new Date(T0-50*3600e3)});addSel('held-'+id,'u1',id,{status:'SENDING',finalDispatchAt:new Date(T0-1000)});}
+    addMatch(51,{kickoff:new Date(T0-50*3600e3)});
+    const findMany=db.prisma.match.findMany;
+    db.prisma.match.findMany=async(args:any)=>(await findMany(args)).sort((a:any,b:any)=>a.fixtureId-b.fixtureId).slice(0,args.take??Infinity);
+    const core=makeCore();await core.cleanup();expect(db.tables.match).toHaveLength(51);
+    await core.cleanup();expect(db.tables.match).toHaveLength(50);expect(db.tables.selection).toHaveLength(50);expect(unlink).not.toHaveBeenCalled();
+    await core.cleanup();expect(db.tables.match).toHaveLength(50);expect(db.tables.selection.every(s=>s.status==='SENDING')).toBe(true);
+  });
+  it('cleanup rechecks children after locking an apparently unselected Match',async()=>{
+    addMatch(1,{kickoff:new Date(T0-50*3600e3)});
+    const raw=db.prisma.$queryRaw;
+    db.prisma.$queryRaw=async(strings:TemplateStringsArray,...values:any[])=>{
+      if(strings.join('').includes('jsonb_array_elements_text'))addSel('arrived-before-lock','u1',1,{status:'SELECTED'});
+      return raw(strings,...values);
+    };
+    await makeCore().cleanup();expect(db.tables.match).toHaveLength(1);expect(db.tables.selection).toHaveLength(1);expect(unlink).not.toHaveBeenCalled();
+  });
+  it('cleanup retains an unselected Match while an active manual render holds a shared lease',async()=>{
+    addMatch(1,{kickoff:new Date(T0-50*3600e3)});
+    const raw=db.prisma.$queryRaw;
+    db.prisma.$queryRaw=async(strings:TemplateStringsArray,...values:any[])=>strings.join('').includes('jsonb_array_elements_text')?[{fixtureId:1,leased:false}]:raw(strings,...values);
+    await makeCore().cleanup();expect(db.tables.match).toHaveLength(1);
+  });
+
+
 });
 
 describe('worker lock-loss delivery safety',()=>{
  it('does not send after its lease is lost during rendering',async()=>{addUser('u');finishedWithEvents(1);addSel('s','u',1);let active=true;renderPost.mockImplementationOnce(async()=>{active=false;return '/tmp/post.jpg';});const core=makeCore({isActive:()=>active});await expect(core.tick()).rejects.toMatchObject({code:'MATCH_WORKER_LOCK_LOST'});expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('s').status).toBe('SENDING');});
+ it('requests render artifact cleanup only after Telegram confirms a delivery',async()=>{
+  finishedWithEvents(1);addSel('cleanup-ok','u1',1);const cleanup=vi.fn(async()=>({deleted:0})),htmlCleanup=vi.fn(async()=>({deleted:0}));
+  await makeCore({cleanupMatchArtifacts:cleanup,cleanupMatchHtml:htmlCleanup}).tick();expect(tg.sendDocument).toHaveBeenCalledTimes(1);expect(cleanup).toHaveBeenCalledTimes(1);expect(cleanup).toHaveBeenCalledWith('/tmp/post.jpg');expect(htmlCleanup).toHaveBeenCalledTimes(1);
+  finishedWithEvents(2);addSel('cleanup-uncertain','u1',2);tg.sendDocument.mockRejectedValueOnce(networkError());const noCleanup=vi.fn(),uncertainHtml=vi.fn(async()=>({deleted:0}));await makeCore({cleanupMatchArtifacts:noCleanup,cleanupMatchHtml:uncertainHtml}).tick();expect(noCleanup).not.toHaveBeenCalled();expect(uncertainHtml).toHaveBeenCalledTimes(1);
+ });
 });
 
 describe('H2 approved-recipient delivery gates',()=>{
@@ -566,23 +612,23 @@ describe('H2 approved-recipient delivery gates',()=>{
 });
 
 describe('reference-safe match retention',()=>{
-  it('retains a shared background until its last retained selection is gone',async()=>{
+  it('retains selected match rows and shared backgrounds until a receipt archive is approved',async()=>{
     const file=path.resolve('storage/backgrounds/shared.jpg');
     addMatch(1,{kickoff:new Date(T0-50*3600e3)});addMatch(2);addSel('old','u1',1,{backgroundPath:file});addSel('new','u1',2,{backgroundPath:file});
-    await makeCore().cleanup();expect(unlink).not.toHaveBeenCalled();expect(db.tables.selection.map(s=>s.id)).toEqual(['new']);
-    clock.now+=50*3600e3;await makeCore().cleanup();expect(unlink).toHaveBeenCalledExactlyOnceWith(file);
+    await makeCore().cleanup();expect(unlink).not.toHaveBeenCalled();expect(db.tables.selection.map(s=>s.id)).toEqual(['old','new']);expect(db.tables.match.map(m=>m.fixtureId)).toEqual([1,2]);
+    clock.now+=50*3600e3;await makeCore().cleanup();expect(unlink).not.toHaveBeenCalled();expect(db.tables.selection.map(s=>s.id)).toEqual(['old','new']);
   });
-  it('removes duplicate orphan paths once, only after deleting old database references',async()=>{
+  it('never auto-deletes a saved background even if multiple old selections reference it',async()=>{
     const file=path.resolve('storage/backgrounds/shared-old.jpg');addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('a','u1',1,{backgroundPath:file});addSel('b','u1',1,{backgroundPath:file});
-    unlink.mockImplementation(async()=>{expect(db.tables.selection).toHaveLength(0);});await makeCore().cleanup();expect(unlink).toHaveBeenCalledExactlyOnceWith(file);
+    await makeCore().cleanup();expect(db.tables.selection).toHaveLength(2);expect(db.tables.match).toHaveLength(1);expect(unlink).not.toHaveBeenCalled();
   });
   it('never unlinks an outside path in an expired record',async()=>{
     addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('unsafe','u1',1,{backgroundPath:path.resolve('storage/backgrounds/../../keep.env')});
-    await makeCore().cleanup();expect(db.tables.match).toHaveLength(0);expect(unlink).not.toHaveBeenCalled();
+    await makeCore().cleanup();expect(db.tables.match).toHaveLength(1);expect(unlink).not.toHaveBeenCalled();
   });
   it('keeps files and records intact when deleting old matches fails',async()=>{
-    addMatch(1,{kickoff:new Date(T0-50*3600e3)});addSel('old','u1',1,{backgroundPath:path.resolve('storage/backgrounds/keep.jpg')});
-    db.failNext('match','deleteMany',new Error('database unavailable'));await expect(makeCore().cleanup()).rejects.toThrow('database unavailable');expect(unlink).not.toHaveBeenCalled();expect(db.tables.selection).toHaveLength(1);
+    addMatch(1,{kickoff:new Date(T0-50*3600e3)});
+    db.failNext('match','deleteMany',new Error('database unavailable'));await expect(makeCore().cleanup()).rejects.toThrow('database unavailable');expect(unlink).not.toHaveBeenCalled();expect(db.tables.match).toHaveLength(1);
   });
   it('retires valid expired UTC and legacy date keys only, preserving the cutoff and unrelated keys',async()=>{
     const expired=['utc:2026-10-01|39,78','utc:2026-10-06|39','2026-10-01'];
@@ -761,5 +807,28 @@ describe('retiring only disposable worker state',()=>{
  it('retires unused event counters without expiring delivered-but-unsaved acknowledgements',async()=>{
   addMatch(1);addSel('live','u1',1);const core=makeCore();core._state.emptyEvents.set(1,2);core._state.emptyEvents.set(999,2);core._state.deliveredButUnsaved.set('protected',T0-100*3600e3);
   await core.cleanup();expect([...core._state.emptyEvents]).toEqual([[1,2]]);expect(core._state.deliveredButUnsaved.has('protected')).toBe(true);
+ });
+});
+
+
+describe('shared-bot automatic recipient isolation',()=>{
+ it('delivers the same final match independently to owner and delegate using their own brand and background',async()=>{
+  addSharedMember();finishedWithEvents(1);addSel('owner-final','u1',1);addSel('delegate-final','delegate',1);
+  renderPost.mockImplementation(async(payload:any)=>'/tmp/'+payload.fixture_id+'.png');
+  await makeCore({pickBackground:async(sel:any)=>({background_data_uri:'private-'+sel.userId})}).tick();
+  expect(tg.sendDocument.mock.calls.map(c=>c[0])).toEqual(['101','202']);
+  expect(renderPost.mock.calls.map(c=>c[0].background_data_uri)).toEqual(['private-u1','private-delegate']);
+  expect(renderPost.mock.calls.map(c=>c[0].page_name)).toEqual(['Page u1','Page delegate']);
+  expect(sel('delegate-final').status).toBe('COMPLETED');
+ });
+ it('blocks a delegate result revoked and restored during rendering without reviving its retired job',async()=>{
+  const member=addSharedMember();finishedWithEvents(1);addSel('delegate-revoked','delegate',1);
+  renderPost.mockImplementationOnce(async()=>{member.version++;sel('delegate-revoked').status='DESELECTED';return '/tmp/private.png';});
+  await makeCore().tick();expect(tg.sendDocument).not.toHaveBeenCalled();expect(sel('delegate-revoked').status).toBe('DESELECTED');
+ });
+ it('routes the live checkpoint and subsequent full-time result to the delegate, never the owner',async()=>{
+  addSharedMember();addMatch(1);addSel('delegate-live','delegate',1);observeLive();apiEvents[1]=[GOAL(20),GOAL(50),GOAL(80,'Beta FC',2,'Other Player')];
+  const core=makeCore();await core.tick();expect(tg.sendDocument).toHaveBeenCalledTimes(1);expect(tg.sendDocument.mock.calls[0][0]).toBe('202');expect(sel('delegate-live').liveStatus).toBe('SENT');
+  liveStatus[1]='FT';advance(2);Object.assign(match(1),{homeScore:2,awayScore:1});await core.tick();expect(tg.sendDocument).toHaveBeenCalledTimes(2);expect(tg.sendDocument.mock.calls[1][0]).toBe('202');
  });
 });

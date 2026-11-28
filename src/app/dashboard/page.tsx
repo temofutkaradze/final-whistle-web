@@ -1,14 +1,17 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { SITE } from "@/lib/site";
+import { prisma } from "@/lib/db";
 
 export default async function Dashboard() {
-  await requireUser();
+  const user = await requireUser();
+  const news = await prisma.newsSettings.findUnique({where:{userId:user.id},select:{botId:true}});
 
   return (
     <div className="container dash-page workspace-page">
       <h1>Your workspace</h1>
       <p className="lead">Choose a generator. Manage your designs here and create your posts in Telegram.</p>
+      {(user.botToken||news?.botId)&&<p><Link className="btn ghost" href="/dashboard/users">User Management</Link></p>}
       <div className="generator-grid">
         <Link href="/dashboard/match" className="card generator-card">
           <img className="generator-artwork" src={SITE.examples[1].src} alt="" width="96" height="120" />

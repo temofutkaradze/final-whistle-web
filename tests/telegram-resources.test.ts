@@ -32,6 +32,12 @@ describe('website Telegram deadlines without retries',()=>{
  });
 });
 describe('bounded streaming Telegram images',()=>{
+ it('rechecks authorization after reading the private PNG and before network dispatch',async()=>{
+  const fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);
+  const beforeDispatch=vi.fn(async()=>{throw Error('Access revoked');});
+  await expect(makeTelegram('fake').sendDocument('2','private.png','','news.png',{beforeDispatch})).rejects.toThrow('revoked');
+  expect(beforeDispatch).toHaveBeenCalledOnce();expect(fetcher).not.toHaveBeenCalled();
+ });
  it('accepts document filename or MIME metadata, and normal Photos, without silent ignoring',()=>{
   for(const name of ['IMAGE.JPG','IMAGE.JPEG','image.png','image.webp']){
    expect(matchImageUpload({document:{file_id:'doc',file_name:name,mime_type:'application/octet-stream'}}).fileId).toBe('doc');
@@ -45,7 +51,7 @@ describe('bounded streaming Telegram images',()=>{
   const bytes=Buffer.from([255,216,255,224,17,22,33]);
   const fetcher=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ok:true,result:{file_size:bytes.length,file_path:'documents/file.bin'}}))).mockResolvedValueOnce(new Response(bytes));vi.stubGlobal('fetch',fetcher);
   const saved=await makeTelegram('fake').downloadTelegramFile('doc','/fake','original',{imageExtension:'.jpeg'});
-  expect(saved).toMatch(/original\.jpeg$/);expect(files.writeFile).toHaveBeenCalledWith(saved,bytes);
+  expect(saved).toMatch(/original\.jpeg$/);expect(files.writeFile).toHaveBeenCalledWith(saved,bytes,{flag:"wx",mode:0o600});
  });
  it('cancels an oversized stream before buffering the remaining body',async()=>{
   let cancelled=false,pulls=0;const body=new ReadableStream<Uint8Array>({pull(c){pulls++;c.enqueue(new Uint8Array(4));},cancel(){cancelled=true;}});
@@ -60,6 +66,6 @@ describe('bounded streaming Telegram images',()=>{
  });
  it('writes a small complete file only after bounded streaming succeeds',async()=>{
   const fetcher=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ok:true,result:{file_size:3,file_path:'photo.jpg'}}))).mockResolvedValueOnce(new Response(new Uint8Array([1,2,3])));vi.stubGlobal('fetch',fetcher);
-  await makeTelegram('fake').downloadTelegramFile('1','/fake','file');expect(files.writeFile).toHaveBeenCalledWith(expect.any(String),Buffer.from([1,2,3]));
+  await makeTelegram('fake').downloadTelegramFile('1','/fake','file');expect(files.writeFile).toHaveBeenCalledWith(expect.any(String),Buffer.from([1,2,3]),{flag:"wx",mode:0o600});
  });
 });

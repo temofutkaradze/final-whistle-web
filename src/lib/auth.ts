@@ -40,6 +40,11 @@ export const getCurrentUser = cache(async () => {
     include: { user: true },
   });
   if (!session || session.expiresAt < new Date()) return null;
+  if (session.user.email.endsWith('@telegram.invalid')) {
+    try {
+      if (await prisma.telegramMember.findUnique({where:{principalId:session.user.id}})) return null;
+    } catch (error) { if ((error as {code?:string}).code !== 'P2021') throw error; }
+  }
   return session.user;
 });
 

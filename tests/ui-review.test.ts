@@ -22,6 +22,7 @@ import News from '@/app/news/page';
 import Header from '@/app/header';
 const pages:Record<string,string>={};
 beforeAll(async()=>{
+ vi.stubEnv('FW_ALLOW_REGISTRATION','true');
  const trees={landing:await Home(),login:await Login({searchParams:Promise.resolve({})}),signup:await Signup({searchParams:Promise.resolve({})}),dashboard:await Dashboard(),match:await Match({searchParams:Promise.resolve({})}),news:await News({searchParams:Promise.resolve({})})};
  for(const [name,tree] of Object.entries(trees)){
   pages[name]=renderToStaticMarkup(React.createElement(React.Fragment,null,React.createElement(Header,{user:name==='dashboard'||name==='match'||name==='news'?{email:'editor@example.test'}:null}),React.createElement('main',{id:'main'},tree)));

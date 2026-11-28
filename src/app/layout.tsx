@@ -1,3 +1,4 @@
+import {headers} from 'next/headers';
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "./globals.css";
@@ -24,10 +25,11 @@ const THEME_SCRIPT = `try{var t=localStorage.getItem("fw-theme")||(window.matchM
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
+  const nonce=(await headers()).get('x-nonce')??undefined;
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <Script id="fw-theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <Script nonce={nonce} id="fw-theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

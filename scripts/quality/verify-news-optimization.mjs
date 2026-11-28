@@ -19,17 +19,19 @@ const source=await fs.readFile(process.argv[2]),normalized=await sharp(source).r
 const out=path.resolve('storage/optimization-verification-'+Date.now());await fs.mkdir(out,{recursive:true});
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const pixelHash=async b=>hash(await sharp(b).ensureAlpha().raw().toBuffer());
-const browser=await chromium.launch({headless:true});
+const runtime=require('../../render/runtime/browser.js')({chromium});
+const browser=await runtime.getBrowser();
 const render=createRenderer({getBrowser:async()=>browser,captureHiRes:page=>page.screenshot({type:'png',scale:'device',animations:'disabled'}),makeJpeg:()=>{throw Error('Unexpected JPEG conversion');},sharp,outputDir:path.resolve('render/output')});
 const base=buildOriginalJob('AUTHOR | SAME *PHOTO* AND HEADLINE',false);
 const jobs=[base,...['left','right'].map(layout=>({...base,layout})),... [false,true].map(breakingText=>({...base,layout:'breaking',breakingText})),
   ...['headline-subtitle','large-headline','news-red','did-you-know'].flatMap(template=>[1,2].filter(v=>v===1||['news-red','did-you-know'].includes(template)).map(version=>({...base,editorial:{template,version,headline:'SAME *PHOTO* AND HEADLINE',subtitle:'Supporting text'}}))),
+  ...[128,160].map(bottomOffset=>({...base,editorial:{template:'large-headline',layoutMode:'manual',bottomOffset,headline:'SAME *PHOTO*\nAND HEADLINE',subtitle:''}})),
   {...base,brandingOnly:true,branding:true}];
 const rows=[];
 try{
   for(const [i,job]of jobs.entries()){
     if(available()<128)throw Error('Stopped: insufficient remaining system memory');
-    const name=job.brandingOnly?'branding':job.editorial?job.editorial.template+'-'+job.editorial.version:job.layout==='breaking'?'breaking-'+job.breakingText:job.layout;
+    const name=job.brandingOnly?'branding':job.editorial?job.editorial.template+'-'+(job.editorial.layoutMode==='manual'?'manual-'+job.editorial.bottomOffset:job.editorial.version):job.layout==='breaking'?'breaking-'+job.breakingText:job.layout;
     const circle=['left','right'].includes(job.layout)?normalized:null;
     let width=2160,height=2700,html;
     if(job.brandingOnly){const m=await sharp(normalized).metadata(),scale=Math.max(1,Math.min(2160/m.width,2700/m.height));width=Math.round(m.width*scale);height=Math.round(m.height*scale);html=`<html><body style="margin:0;overflow:hidden;width:${width}px;height:${height}px"><img style="display:block;width:${width}px;height:${height}px" src="data:image/png;base64,${normalized.toString('base64')}"></body></html>`;}
@@ -55,5 +57,5 @@ try{
       console.log(JSON.stringify(rows.at(-1)));
     }finally{await fs.unlink(result.png_path);}
   }
-}finally{await browser.close();await fs.writeFile(path.join(out,'results.json'),JSON.stringify(rows,null,2));}
+}finally{await runtime.resetBrowser();await fs.writeFile(path.join(out,'results.json'),JSON.stringify(rows,null,2));}
 console.log('Results: '+out);
