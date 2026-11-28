@@ -17,6 +17,8 @@ SKUS = {"B93297", "B93298", "B91445", "B91961", "B91962"}
 # Fixed SDK allowlist: Usage API POST is a read-only query, not a resource write.
 OPERATIONS = {
     "regions": ("identity", "list_region_subscriptions", "list"),
+    "quotas": ("quotas", "list_quotas", "list"),
+    "quota": ("quotas", "get_quota", "object"),
     "subscriptions": ("subscription", "list_subscriptions", "items"),
     "subscription": ("subscription", "get_subscription", "object"),
     "compartments": ("identity", "list_compartments", "list"),
@@ -135,6 +137,7 @@ class SDKBackend:
                            "network": self.oci.core.VirtualNetworkClient,
                            "block": self.oci.core.BlockstorageClient,
                            "limits": self.oci.limits.LimitsClient,
+                           "quotas": self.oci.limits.QuotasClient,
                            "usage": self.oci.usage_api.UsageapiClient,
                            "subscription": self.oci.osp_gateway.SubscriptionServiceClient}
                 self.clients[key] = classes[family](dict(self.config, region=region),
@@ -347,9 +350,34 @@ class Audit:
                     self.report["service_limits"].append({"limit": name, "scope_ref": ref(compartment),
                         "domain_ref": ref(domain), "scope": "root" if compartment == self.tenancy else "target",
                         "used": used, "available": available,
+                        "effective_quota_value": value.get("effective_quota_value") if type(value.get("effective_quota_value")) in (int, float) and math.isfinite(value["effective_quota_value"]) and value["effective_quota_value"] >= 0 else None,
                         "billing_entitlement": False})
                 except AuditError:
                     self.error("limits", compartment, "ambiguous_limits_data")
+
+    def allocation_controls(self):
+        import allocation_controls as controls
+        self.report["allocation_control"] = {"current_root_enforcement_verified": False,
+            "historical_month_enforcement_verified": False}
+        rows = self.read("quotas", compartment_id=self.tenancy)
+        if rows is None:
+            return
+        if len(rows) > 50:
+            self.error("quotas", "root", "quota_review_budget_exhausted")
+            return
+        matches = [q for q in rows if q.get("name") == controls.NAME]
+        if len(matches) != 1:
+            self.error("quotas", "root", "required_unique_root_quota_missing")
+            return
+        item = matches[0]
+        if not isinstance(item.get("id"), str) or not item["id"].startswith("ocid1.quota."):
+            self.error("quotas", "root", "quota_identity_invalid")
+            return
+        detail = self.read("quota", quota_id=item["id"])
+        result = controls.verify(item, detail, self.tenancy, self.report["service_limits"])
+        self.report["allocation_control"] = result
+        if not result["current_root_enforcement_verified"]:
+            self.error("quota", "root", "quota_scope_state_or_statements_not_exact")
 
     def billing(self):
         start = self.now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -411,6 +439,7 @@ class Audit:
         self.report["inventory_read_status"] = "PARTIAL" if inventory_errors else "ENUMERATED_SCOPES_READ"
         self.report["tenancy_wide_visibility_proven"] = False
         self.billing()
+        self.allocation_controls()
         totals = {}
         for row in self.report["billing"]["rows"]:
             key = (row["query"], row["sku"], row["unit"], row.get("currency"))
